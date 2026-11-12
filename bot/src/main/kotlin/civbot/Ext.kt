@@ -167,7 +167,7 @@ interface Extension {
 
 object Extensions {
     /** Register feature files here. */
-    val all: List<Extension> = listOf(CityPlus, MilitaryPlus, StatecraftPlus, InfoPlus, ModsPlus)
+    val all: List<Extension> = listOf(CityPlus, MilitaryPlus, StatecraftPlus, InfoPlus, ModsPlus, UnitsPlus, DiplomacyPlus, SetupPlus)
 
     fun tab(id: String): Pair<Extension, ExtTab>? =
         all.asSequence().flatMap { e -> e.tabs.asSequence().map { e to it } }.firstOrNull { it.second.id == id }
