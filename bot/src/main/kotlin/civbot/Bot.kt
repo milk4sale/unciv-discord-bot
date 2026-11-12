@@ -75,6 +75,7 @@ class Bot(override val store: Store, override val ctl: Controller) : ListenerAda
                 SubcommandData("end", "End the game (host only)"),
                 SubcommandData("help", "How to play"),
             ).addSubcommands(Extensions.all.flatMap { runCatching { it.commands() }.getOrDefault(emptyList()) })
+                .addSubcommandGroups(Extensions.all.flatMap { runCatching { it.commandGroups() }.getOrDefault(emptyList()) })
         )
         // Register per server: updates apply instantly (global commands can take minutes and show
         // "This command is outdated"). Clear any old global copy so it doesn't appear twice.
@@ -230,7 +231,7 @@ class Bot(override val store: Store, override val ctl: Controller) : ListenerAda
             ActionRow.of(sel("size", "Map size", GameOps.MAP_SIZES, st.mapSize)),
             ActionRow.of(sel("type", "Map type", GameOps.MAP_TYPES, st.mapType)),
             ActionRow.of(sel("diff", "Difficulty", GameOps.DIFFICULTIES, st.difficulty)),
-            ActionRow.of(sel("ai", "AI opponents", (0..7).map { it.toString() }, st.aiCivs.toString())),
+            ActionRow.of(sel("ai", "AI opponents", (0..SetupPlus.maxAiChoice(meta)).map { it.toString() }, st.aiCivs.toString())),
         )
     }
 
@@ -337,7 +338,7 @@ class Bot(override val store: Store, override val ctl: Controller) : ListenerAda
                 synchronized(meta) {
                     when (verb) {
                         "join" -> if (meta.seatOf(uid) == null) {
-                            if (meta.seats.size + meta.settings.aiCivs >= 12) throw PlayerError("The game is full.")
+                            if (SetupPlus.isFull(meta)) throw PlayerError("The game is full.")
                             meta.seats += Seat(uid, name)
                         }
                         "leave" -> {
@@ -738,7 +739,7 @@ class Bot(override val store: Store, override val ctl: Controller) : ListenerAda
         **🤖 Auto-pick** lets the AI fill in anything you skipped. **✅ End turn** passes play on; AIs move automatically.
 
         `/civ play` panel · `/civ board` re-post board · `/civ spectate` watch · `/civ leave` hand your civ to the AI
-        Host: `/civ kick @player` · `/civ host @player` · `/civ end` · `/civ lobby` (mods, map, scenario) · `/civ espionage`
-        Admins: `/civ mod` (install Unciv mods from GitHub) · `/civ map` (upload custom maps) · Anyone: `/civ wiki`
+        Host: `/civ kick @player` · `/civ host @player` · `/civ end` · `/civ lobby` (mods, map, scenario) · `/civ setup` (every other option) · `/civ save import` · `/civ espionage`
+        Admins: `/civ mod` (install Unciv mods from GitHub) · `/civ map` (upload custom maps) · Anyone: `/civ wiki` · Players: `/civ save export` (download the game for desktop Unciv)
     """.trimIndent()).build()
 }

@@ -9,6 +9,7 @@ import com.unciv.models.metadata.GameSetupInfo
 import net.dv8tion.jda.api.EmbedBuilder
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent
 import net.dv8tion.jda.api.interactions.commands.build.SubcommandData
+import net.dv8tion.jda.api.interactions.commands.build.SubcommandGroupData
 import net.dv8tion.jda.api.interactions.components.ActionRow
 import net.dv8tion.jda.api.interactions.components.buttons.Button
 import net.dv8tion.jda.api.interactions.components.selections.StringSelectMenu
@@ -142,6 +143,8 @@ interface Extension {
     fun doCityChoice(city: City, id: String): String? = null
 
     fun commands(): List<SubcommandData> = emptyList()
+    /** Grouped slash subcommands, e.g. `/civ save export` (routed to [onCommand]; check event.subcommandGroup). */
+    fun commandGroups(): List<SubcommandGroupData> = emptyList()
     /** Return true if handled. Runs on the Discord gateway thread — reply/defer within 3 s. */
     fun onCommand(event: SlashCommandInteractionEvent, bot: BotApi): Boolean = false
 
