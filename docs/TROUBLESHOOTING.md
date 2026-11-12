@@ -4,8 +4,8 @@
 
 ### "The application did not respond"
 The bot didn't answer within 3 seconds. Usually one of these:
-- **The bot isn't running.** Check that `./run.sh` is still open, or run
-  `systemctl --user status civbot`.
+- **The bot isn't running.** Check that the `run.cmd` / `./run.sh` window is still open, or run
+  `systemctl --user status civbot` (Linux).
 - **It was started while a build was still writing files.** Restart it once the build has
   finished.
 - **Two copies are running** (for example the service *and* `./run.sh`). Stop one.
@@ -45,11 +45,31 @@ or move a unit differently first. If it keeps happening, please open an issue wi
 ## Running the bot
 
 ### `Java not found` / `Java 17 found, but Java 21 or newer is required`
-Install JDK 21 (`setup.sh` prints the command for common systems), then run `./setup.sh` again.
+Install JDK 21 (`setup.sh` prints the command for common systems; on Windows, `setup.cmd`
+offers to install it), then run the setup script again.
 On Arch-based systems with several JDKs installed: `sudo archlinux-java set java-21-openjdk`.
 
 ### `DISCORD_TOKEN is not set`
-Create `.env` (`cp .env.example .env`) and put your token on the `DISCORD_TOKEN=` line.
+Create `.env` (`cp .env.example .env`) and put your token on the `DISCORD_TOKEN=` line. On
+Windows, run `setup.cmd` again and paste the token when it asks.
+
+## Windows
+
+### "Windows protected your PC" / "Open File - Security Warning"
+Windows shows this for any script downloaded from the internet. Click **Run**, or **More info**
+then **Run anyway**.
+
+### The window closes straight away / nothing happens
+Open the CivBot folder, click the address bar, type `cmd` and press Enter. In the Command Prompt
+that opens, type `setup.cmd` (or `run.cmd`) and press Enter. The window then stays open and
+shows the error.
+
+### Java is still "not installed" right after installing it
+Close the window and run `setup.cmd` again. New programs only show up in windows opened after
+the install.
+
+### Where's the log when it runs in the background?
+`civbot.log` and `civbot-error.log` in the CivBot folder.
 
 ### `Login failed` / `401 Unauthorized`
 The token is wrong or was reset. Copy a fresh one from Developer Portal → Bot → Reset Token.
@@ -57,13 +77,13 @@ The token is wrong or was reset. Copy a fresh one from Developer Portal → Bot 
 ### `Start the bot from <unciv>/android/assets (use run.sh)`
 Always start the bot with `./run.sh` (or the service), not by running the Java binary directly.
 
-### `Not built yet — run ./setup.sh first`
-Run `./setup.sh`.
+### `Not built yet`
+Run `setup.cmd` (Windows) or `./setup.sh`.
 
 ### The build fails
 - Check your internet connection. The first build downloads Gradle and libraries.
 - Check you have about 1.5 GB of free disk space.
-- Delete `bot/build` and `unciv/.gradle`, then run `./setup.sh` again.
+- Delete `bot/build` and `unciv/.gradle`, then run the setup script again.
 
 ### It's slow / my games stutter while AIs move
 AI turns use CPU for a moment. The service runs at lower priority (`Nice=5`). Large maps with

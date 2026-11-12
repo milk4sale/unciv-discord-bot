@@ -7,7 +7,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-UNCIV_COMMIT="0f2eb314a17213da0c0ce3b9d9c4693e2ed6ef96"
+UNCIV_COMMIT="0f2eb314a17213da0c0ce3b9d9c4693e2ed6ef96"   # keep in sync with scripts/windows/setup.ps1
 
 if ! command -v java >/dev/null; then
   cat >&2 <<'MSG'

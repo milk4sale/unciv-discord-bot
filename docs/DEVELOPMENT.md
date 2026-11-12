@@ -78,7 +78,9 @@ bot/
     CityPlus.kt, MilitaryPlus.kt, StatecraftPlus.kt, InfoPlus.kt, ModsPlus.kt   feature extensions
 activity/index.html     Activity front-end
 scripts/install-service.sh
-setup.sh / run.sh
+setup.sh / run.sh                       Linux and macOS
+setup.cmd / run.cmd                     Windows (they run scripts/windows/*.ps1)
+scripts/windows/install-service.cmd     Windows background task (Task Scheduler)
 ```
 
 ## Building and testing
@@ -94,7 +96,8 @@ map) so every run and CI see the same world. It plays about 15 game turns with t
 real `Controller`, then runs a scenario that sets up hard-to-reach situations: workers, escorts,
 city-state gifts, pantheon, free Great Person, and deals, war and peace between two humans. It
 prints a feature checklist and `Errors: N`, and writes every panel tab to `selftest-out/*.png`
-so you can check the visuals. CI runs it on every push.
+so you can check the visuals. CI runs it on every push, on Linux and on Windows (through
+`setup.cmd`/`run.cmd`, with both the git and the zip download of Unciv).
 
 To try changes in Discord, use a separate test bot token and server.
 
@@ -103,7 +106,7 @@ To try changes in Discord, use a separate test bot token and server.
 `setup.sh` pins Unciv to a specific commit (`UNCIV_COMMIT`) because the bot calls engine APIs
 directly. To move to a newer Unciv:
 
-1. Change `UNCIV_COMMIT` in `setup.sh` and run it.
+1. Change `UNCIV_COMMIT` in `setup.sh` **and** `$UncivCommit` in `scripts/windows/setup.ps1`, then run setup.
 2. Fix any compile errors (usually renamed functions).
 3. Run `./run.sh --selftest` until it reports `Errors: 0`.
 

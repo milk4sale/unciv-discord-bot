@@ -96,7 +96,14 @@ diplomacy and every victory type. Players install nothing: they click.
 
 ## Quick start
 
-You need **Java 21**, **git**, and a computer that's on while people play. Your own PC works fine.
+Works on **Windows, Linux and macOS**. You need a computer that's on while people play; your
+own PC works fine.
+
+**Windows:** click **Code → Download ZIP**, extract it, and double-click **`setup.cmd`**. It
+installs Java if needed, builds the bot and asks for your bot token. Then double-click
+**`run.cmd`**.
+
+**Linux / macOS** (needs Java 21 and git):
 
 ```bash
 git clone https://github.com/milk4sale/unciv-discord-bot.git
