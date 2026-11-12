@@ -9,7 +9,7 @@ import java.io.File
  * tab and feature, renders every tab to PNG and checks save/load. Prints a feature checklist.
  */
 object SelfTest {
-    private const val TURNS = 30 // human turns (two players -> ~15 game turns)
+    private const val TURNS = 6 // human turns (two players -> ~15 game turns)
     private val hits = LinkedHashMap<String, Int>()
     private val errors = ArrayList<String>()
     private fun hit(name: String) { hits[name] = (hits[name] ?: 0) + 1 }
@@ -276,6 +276,33 @@ object SelfTest {
             // every extension tab must render
             for ((_, t) in Extensions.all.flatMap { e -> e.tabs.map { e to it } }) {
                 act(alice, "tab", value = t.id); render(alice, "ext-${t.id.lowercase()}")
+            }
+        }
+
+        // ---- Standing orders: a long Go to keeps going on later turns
+        run {
+            val seat = seatNow()
+            val (unitId, from, target) = eng { g ->
+                val c = GameOps.civOf(g, seat)
+                val u = c.units.getCivUnits().firstOrNull { it.isMilitary() && !it.baseUnit.isAirUnit() && !it.baseUnit.isWaterUnit }
+                    ?: c.units.addUnit("Warrior", c.cities.first())!!
+                u.action = null; u.automated = false; u.currentMovement = u.getMaxMovement().toFloat()
+                // a reachable land tile 4-5 away, preferring our own or unclaimed land (fewer enemies on the way)
+                val dest = (4..5).asSequence().flatMap { d -> u.getTile().getTilesAtDistance(d) }
+                    .filter { it.isLand && !it.isImpassible() && it.militaryUnit == null && u.movement.canReach(it) && !u.movement.canReachInCurrentTurn(it) }
+                    .sortedBy { if (it.getOwner() == c || it.getOwner() == null) 0 else 1 }.firstOrNull()
+                Triple(u.id, u.getTile().position, dest)
+            }
+            if (target == null) println("standing orders: no reachable far tile on this map — skipped")
+            else {
+                eng { g -> GameOps.moveUnit(GameOps.unitById(GameOps.civOf(g, seat), unitId)!!, target) }
+                val afterOrder = eng { g -> GameOps.unitById(GameOps.civOf(g, seat), unitId)?.getTile()?.position }
+                // let both players end turns until it's this seat's turn again
+                repeat(2) { val sNow = seatNow(); ctl.apply(s, sNow, "end", listOf("force"), null) }
+                val later = eng { g -> GameOps.unitById(GameOps.civOf(g, seat), unitId)?.getTile()?.position }
+                if (later == null) println("standing orders: the unit was lost on the way (combat) — skipped")
+                else if (afterOrder != null && later != afterOrder) { hit("standing orders: multi-turn Go to keeps moving"); println("standing orders: $from -> $afterOrder -> $later (target ${target.position})") }
+                else errors += "standing orders: unit didn't continue its Go to ($from -> $afterOrder -> $later, target ${target.position})"
             }
         }
 

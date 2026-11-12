@@ -40,6 +40,9 @@ object Engine {
             game.settings = GameSettings().apply {
                 showTutorials = false
                 turnsBetweenAutosaves = 1_000_000
+                // Standing orders (multi-turn Go to, Automate, Explore, Connect road) carry on at the start of each
+                // human turn. The desktop app does this from its world screen, which the bot doesn't have.
+                automatedUnitsMoveOnTurnStart = true
             }
             game.files = UncivFiles(Gdx.files)
             RulesetCache.loadRulesets(noMods = true)

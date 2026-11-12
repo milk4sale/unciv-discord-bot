@@ -1173,7 +1173,9 @@ object StatecraftPlus : Extension {
         act("advisor", null, "advisor: answers events + applies Unciv defaults")
         val notes = st().flash.toList()
         println("  [sp advisor] " + notes.joinToString(" / "))
-        check(notes.any { it.contains("Advisor answered the event") && it.contains("Study their customs") }, "advisor: event picked with Unciv's AI weighting")
+        // Unciv picks by weighted random, so any of the event's choices is a valid answer
+        check(notes.any { n -> n.contains("Advisor answered the event") && t.eng { g -> g.ruleset.events[evName]?.choices?.any { c -> n.contains(GameOps.clean(c.text)) } == true } },
+            "advisor: event picked with Unciv's AI weighting")
         check(notes.count { it.contains("Unciv's default") } == 3, "advisor: Unciv's default applied explicitly (city, denounce, city-state)")
         check(t.eng { aliceCiv().popupAlerts.none { it.type == AlertType.Event || it.type in DEFAULTS } } &&
             t.eng { g -> g.getCities().first { it.id == cityId }.civ == aliceCiv() }, "advisor: decisions resolved without side effects")
