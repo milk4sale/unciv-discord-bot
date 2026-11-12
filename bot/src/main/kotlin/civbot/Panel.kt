@@ -297,6 +297,7 @@ object Panel {
                         "\nEra: ${civ.getEra().name} · ${tm.techsResearched.size} techs known", false)
                 rows += ActionRow.of(select(id(gid, "tech"), "Research next…", GameOps.researchChoices(civ), cur?.let { "tech:$it" }, enabled = myTurn))
                 rows += ActionRow.of(select(id(gid, "goal"), "Set a long-term goal…", GameOps.researchGoalChoices(civ), enabled = myTurn))
+                rows += ActionRow.of(select(id(gid, "sp_qadd"), "➕ Add goal to queue…", StatecraftPlus.queueAddChoices(civ), enabled = myTurn))
                 file = wholeMapFile(game, civ)
             }
 
@@ -308,6 +309,7 @@ object Panel {
                         (if (pm.freePolicies > 0) " · 🎁 ${pm.freePolicies} free" else "") +
                         (if (pm.canAdoptPolicy()) "\n**You can adopt a policy now!**" else "") +
                         "\nAdopted (${adopted.size}): " + adopted.takeLast(12).joinToString().ifEmpty { "none yet" }, false)
+                StatecraftPlus.branchProgress(civ)?.let { eb.addField("🌳 Branches", it, false) }
                 rows += ActionRow.of(select(id(gid, "pol"), if (pm.canAdoptPolicy()) "Adopt a policy…" else "Not enough culture yet",
                     GameOps.policyChoices(civ), enabled = myTurn))
                 file = wholeMapFile(game, civ)
@@ -330,7 +332,7 @@ object Panel {
                             }
                             endRow += btn(gid, "relconfirm", if (founding) "Found religion" else "Enhance religion", "⛪", 3, myTurn)
                         }
-                        types != null -> eb.addField("Beliefs", "You have ${types.size} beliefs to pick — press 🤖 Auto-pick and the advisor will choose them.", false)
+                        types != null -> eb.addField("Beliefs", "You have ${types.size} beliefs to pick — open the ⛪ **Found religion** tab to choose them (or press 🤖 Auto-pick).", false)
                     }
                 }
                 file = wholeMapFile(game, civ)

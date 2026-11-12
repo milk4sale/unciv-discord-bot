@@ -607,7 +607,6 @@ object GameOps {
         return civ.gameInfo.ruleset.technologies.values
             .filter { !tm.isResearched(it.name) && !tm.canBeResearched(it.name) && !tm.isUnresearchable(it) }
             .sortedBy { it.column?.columnNumber ?: 99 }
-            .take(25)
             .map { t ->
                 val steps = tm.getRequiredTechsToDestination(t).size
                 Choice("goal:${t.name}", t.name, "$steps techs away · ${t.era()}", "🎯")
@@ -633,7 +632,7 @@ object GameOps {
         return civ.gameInfo.ruleset.policies.values.filter { pm.isAdoptable(it) }.map { p ->
             val branch = if (p.branch == p) "Opens the ${p.name} tree" else p.branch.name
             Choice("pol:${p.name}", p.name, branch, if (p.branch == p) "📖" else "📜")
-        }.take(25)
+        }
     }
 
     fun adoptedPolicies(civ: Civilization): List<String> =
@@ -703,6 +702,7 @@ object GameOps {
         val idle = civ.units.getCivUnits().count { it.due && it.isIdle() && it.hasMovement() }
         if (idle > 0) w += "**$idle** unit(s) still have orders to give"
         w += UnitsPlus.extraTurnWarnings(civ)
+        StatecraftPlus.inboxWarning(civ, w)?.let { w += it } // skips itself if an Inbox line is already there
         return w
     }
 
@@ -745,6 +745,7 @@ object GameOps {
         // drop purely informational ones. Never touch captured-city decisions.
         val answerable = com.unciv.logic.civilization.diplomacy.Demand.entries.map { it.demandAlert }.toSet() +
             AlertType.CityConquered + AlertType.DeclarationOfFriendship
+        notes += StatecraftPlus.advisorAnswerInbox(civ) // events + decisions with a default: answered explicitly, not dropped
         civ.popupAlerts.removeAll { it.type !in answerable }
         // Unciv's responder clears ALL alerts afterwards; keep captured-city decisions for the player
         val conquests = civ.popupAlerts.filter { it.type == AlertType.CityConquered }
