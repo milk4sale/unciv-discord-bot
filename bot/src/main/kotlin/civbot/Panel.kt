@@ -312,6 +312,7 @@ object Panel {
                 StatecraftPlus.branchProgress(civ)?.let { eb.addField("🌳 Branches", it, false) }
                 rows += ActionRow.of(select(id(gid, "pol"), if (pm.canAdoptPolicy()) "Adopt a policy…" else "Not enough culture yet",
                     GameOps.policyChoices(civ), enabled = myTurn))
+                InfoPlus.policyDetails(civ, st, gid, eb, rows) // 📜 Policy details… dropdown + full effect text
                 file = wholeMapFile(game, civ)
             }
 

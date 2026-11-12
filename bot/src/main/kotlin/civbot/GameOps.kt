@@ -305,8 +305,9 @@ object GameOps {
                 if (!u.canBuildImprovement(imp)) continue
                 if (tile.improvementFunctions.getImprovementBuildingProblems(imp, u.cache.state).any()) continue
                 val turns = imp.getTurnsToBuild(u.civ, u)
-                out += Choice("imp:${imp.name}", "Build ${imp.name}", "$turns turns", "🔨")
+                out += Choice("imp:${imp.name}", "Build ${imp.name}", InfoPlus.improvementDesc(u, imp, turns), "🔨")
             }
+            out += runCatching { InfoPlus.blockedImprovementChoices(u) }.getOrDefault(emptyList()) // 🔒 not yet buildable, with the reason
         }
         if (tile.improvementInProgress != null && u.isCivilian()) out += Choice("cancelimp", "Stop building ${tile.improvementInProgress}", "", "✖️")
 
@@ -631,7 +632,7 @@ object GameOps {
         if (!pm.canAdoptPolicy()) return emptyList()
         return civ.gameInfo.ruleset.policies.values.filter { pm.isAdoptable(it) }.map { p ->
             val branch = if (p.branch == p) "Opens the ${p.name} tree" else p.branch.name
-            Choice("pol:${p.name}", p.name, branch, if (p.branch == p) "📖" else "📜")
+            Choice("pol:${p.name}", if (p.branch == p) p.name else "${p.name} (${p.branch.name})", InfoPlus.policyDesc(p).ifEmpty { branch }, if (p.branch == p) "📖" else "📜")
         }
     }
 

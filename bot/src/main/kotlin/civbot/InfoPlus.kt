@@ -1,6 +1,12 @@
 package civbot
 
+import com.unciv.Constants
 import com.unciv.logic.GameInfo
+import com.unciv.logic.map.mapunit.MapUnit
+import com.unciv.models.stats.Stat
+import com.unciv.models.stats.Stats
+import com.unciv.view.GameView
+import kotlin.math.roundToInt
 import com.unciv.logic.civilization.Civilization
 import com.unciv.logic.civilization.managers.ReligionState
 import com.unciv.models.metadata.BaseRuleset
@@ -25,6 +31,7 @@ import com.unciv.models.ruleset.unique.UniqueType
 import com.unciv.models.ruleset.unit.BaseUnit
 import com.unciv.models.ruleset.unit.Promotion
 import com.unciv.models.translations.tr
+import com.unciv.ui.screens.victoryscreen.RankingType
 import net.dv8tion.jda.api.EmbedBuilder
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent
 import net.dv8tion.jda.api.interactions.commands.OptionType
@@ -43,13 +50,15 @@ import javax.imageio.ImageIO
 
 /**
  * InfoPlus — information screens:
- *  - 🏆 Victory tab: progress towards every enabled victory (yours + what Unciv's VictoryScreen reveals about others), score ranking
- *  - 📖 Civilopedia tab (+ `/civ wiki query:`): browse/search the ruleset's Civilopedia text, with pixel art
+ *  - 🏆 Victory tab: progress towards every enabled victory (yours + what Unciv's VictoryScreen reveals about others), rankings by any stat
+ *  - 📖 Civilopedia tab (+ `/civ wiki query:`): browse/search the ruleset's Civilopedia text, with pixel art and Related… cross-links
+ *  - 📜/🔨 picker texts: policy effects + "Policy details…", improvement yield change / Replaces / blocked reasons
  *  - ✨ Beliefs tab: extra pantheon beliefs (pantheon expansion) and free beliefs for an existing religion
  *  - 📊 Stats tab and 🎞️ Replay tab: see [InfoStats] (InfoPlusStats.kt)
  */
 object InfoPlus : Extension {
-    override val viewVerbs = setOf("ip_cat", "ip_item", "ip_pg", "ip_nx", "ip_search", "ip_fb", "ip_sv", "ip_spg", "ip_rank", "ip_go", "ip_rp", "ip_rturn")
+    override val viewVerbs = setOf("ip_cat", "ip_item", "ip_pg", "ip_nx", "ip_search", "ip_fb", "ip_sv", "ip_spg", "ip_rank", "ip_go", "ip_rp", "ip_rturn",
+        "ip_rel", "ip_vrank", "ip_pold", "ip_impwhy", "ip_pcs")
 
     private const val VICTORY = "VICTORY"
     private const val PEDIA = "CIVILOPEDIA"
@@ -84,28 +93,53 @@ object InfoPlus : Extension {
         val rs = ctx.game.ruleset
         if (InfoStats.handle(verb, ctx, v)) return true
         when (verb) {
-            "ip_cat" -> { val ps = pedia(ctx.st); ps.cat = v ?: ps.cat; ps.page = 0; ps.item = null }
+            "ip_cat" -> { val ps = pedia(ctx.st); ps.cat = v ?: ps.cat; ps.page = 0; ps.item = null; ctx.st.pages.remove(ITEM_KEY) }
             "ip_item" -> pedia(ctx.st).item = v
-            "ip_pg" -> pedia(ctx.st).page += ctx.args.firstOrNull()?.toIntOrNull() ?: 1
+            "ip_pg" -> {
+                // the entry dropdown pages itself (Panel, 23 per page): flip its page
+                val ps = pedia(ctx.st)
+                val list = entries(catOf(ps), rs, ctx.game)
+                val cur = ctx.st.pages[ITEM_KEY] ?: (list.indexOfFirst { it.name == ps.item }.coerceAtLeast(0) / 23)
+                ctx.st.pages[ITEM_KEY] = (cur + (ctx.args.firstOrNull()?.toIntOrNull() ?: 1)).coerceIn(0, maxOf(0, (list.size - 1) / 23))
+            }
             "ip_nx" -> {
                 val ps = pedia(ctx.st)
                 val list = entries(catOf(ps), rs, ctx.game)
                 if (list.isNotEmpty()) {
                     val i = list.indexOfFirst { it.name == ps.item }.coerceAtLeast(0)
                     val n = Math.floorMod(i + (ctx.args.firstOrNull()?.toIntOrNull() ?: 1), list.size)
-                    ps.item = list[n].name; ps.page = n / PAGE
+                    focus(ctx.st, catOf(ps), list[n].name)
                 }
             }
             "ip_search" -> {
                 val q = v?.trim().orEmpty()
                 val hits = search(rs, ctx.game, q)
                 val best = hits.firstOrNull() ?: throw PlayerError("Nothing in the Civilopedia matches **${q.take(50)}**.")
-                val ps = pedia(ctx.st)
-                ps.cat = best.cat.key; ps.item = best.entry.name
-                ps.page = entries(best.cat, rs, ctx.game).indexOfFirst { it.name == best.entry.name }.coerceAtLeast(0) / PAGE
+                focus(ctx.st, best.cat, best.entry.name)
                 ctx.st.tab = PEDIA
                 val also = hits.drop(1).take(4).joinToString { tx(it.entry.name) }
                 ctx.flash += "🔍 **${tx(best.entry.name)}** (${best.cat.label})" + (if (also.isNotEmpty()) " — also: $also" else "")
+            }
+            "ip_rel" -> {
+                // "Related…" cross-link: value "<cat key>|<entry name>"
+                val (key, name) = (v ?: throw PlayerError("Pick an entry.")).split("|", limit = 2).let { it[0] to it.getOrElse(1) { "" } }
+                val cat = cats.firstOrNull { it.key == key } ?: throw PlayerError("Unknown Civilopedia category.")
+                if (entries(cat, rs, ctx.game).none { it.name == name }) throw PlayerError("**${tx(name)}** isn't in this game's Civilopedia.")
+                focus(ctx.st, cat, name)
+                ctx.st.tab = PEDIA
+            }
+            "ip_vrank" -> {
+                val rt = InfoStats.rankingTypes(ctx.civ).firstOrNull { it.name == v } ?: throw PlayerError("Unknown ranking.")
+                ctx.st.ext["ip.vrank"] = rt.name
+            }
+            "ip_pold" -> {
+                val p = rs.policies[v] ?: throw PlayerError("Unknown policy.")
+                ctx.st.ext["ip.pold"] = p.name
+            }
+            "ip_impwhy" -> {
+                val u = ctx.selectedUnit()
+                val name = ctx.args.firstOrNull() ?: v ?: throw PlayerError("Pick an improvement.")
+                ctx.flash += improvementWhy(u, name)
             }
             "ip_pan" -> {
                 ctx.requireTurn()
@@ -234,6 +268,24 @@ object InfoPlus : Extension {
         return count * (67 - (1.1 * count).toInt()) / 100 + 1
     }
 
+    /** VictoryScreenCivRankings, one column: every major civ whose stats the game lets [viewer] see, by [rt]
+     *  (unknown civs stay "an unknown civ"; hidden entirely when the Rankings page is). */
+    fun rankingField(viewer: Civilization, rt: RankingType): Pair<String, String> {
+        val game = viewer.gameInfo
+        val emoji = InfoStats.rankEmoji(rt)
+        fun value(c: Civilization) = runCatching { c.getStatForRanking(rt) }.getOrDefault(0)
+        if (!rankingsShown(game, viewer))
+            return "$emoji ${rt.label}" to "Yours: **${value(viewer)}**. Rankings of other civilizations are hidden in this game."
+        val ranked = game.civilizations.filter { it.isMajorCiv && canViewStats(game, viewer, it) }
+            .sortedBy { it.civName }.sortedByDescending { if (it.isDefeated()) Int.MIN_VALUE else value(it) }
+        val unit = if (rt == RankingType.Score) " pts" else ""
+        val lines = ranked.mapIndexed { i, c -> "${i + 1}. ${nameFor(viewer, c)} — " + (if (c.isDefeated()) "☠️ defeated" else "**${value(c)}**$unit") }
+        val mine = ranked.indexOf(viewer)
+        val shown = if (mine >= 12) lines.take(11) + "…" + lines[mine] else lines.take(12)
+        val note = if (game.gameParameters.hideOtherCivilizationStats && game.victoryData == null) "\n_Other civilizations' stats are hidden in this game._" else ""
+        return "$emoji ${rt.label} ranking" to fit(shown, 1000 - note.length) + note
+    }
+
     fun victoryFields(civ: Civilization): List<Pair<String, String>> {
         val game = civ.gameInfo
         val out = ArrayList<Pair<String, String>>()
@@ -291,19 +343,7 @@ object InfoPlus : Extension {
         }
         if (victories.isEmpty()) out += "🏆 Victory" to "No victory types are enabled in this game."
 
-        // Score ranking (Unciv's Rankings page rules)
-        val score = civ.calculateTotalScore().toInt()
-        if (rankingsShown(game, civ)) {
-            val ranked = majors.filter { canViewStats(game, civ, it) }
-                .sortedBy { it.civName }.sortedByDescending { if (it.isDefeated()) Int.MIN_VALUE else it.calculateTotalScore().toInt() }
-            val lines = ranked.mapIndexed { i, c ->
-                "${i + 1}. ${nameFor(civ, c)} — " + (if (c.isDefeated()) "☠️ defeated" else "${c.calculateTotalScore().toInt()} pts")
-            }
-            val mine = ranked.indexOf(civ)
-            val shown = if (mine >= 12) lines.take(11) + "…" + lines[mine] else lines.take(12)
-            val note = if (game.gameParameters.hideOtherCivilizationStats) "\n_Other civilizations' stats are hidden in this game._" else ""
-            out += "🏅 Score ranking" to fit(shown, 1000 - note.length) + note
-        } else out += "🏅 Score" to "Your score: **$score**. Rankings of other civilizations are hidden in this game."
+        out += rankingField(civ, RankingType.Score)
         return out
     }
 
@@ -315,8 +355,15 @@ object InfoPlus : Extension {
             t.button("ip_go", "Replay", "🎞️", 2, InfoStats.replayAllowed(t.civ), InfoStats.REPLAY),
             t.button("ip_go", "Stats", "📊", 2, true, InfoStats.View.BREAKDOWN.key),
         ))
+        // Rankings by any stat (Unciv's Rankings page has a column per RankingType)
+        val rt = InfoStats.rankingTypes(t.civ).firstOrNull { it.name == t.st.ext["ip.vrank"] } ?: RankingType.Score
+        if (rankingsShown(t.game, t.civ)) t.rows += ActionRow.of(t.select("ip_vrank", "🏅 Rank every civ by…", InfoStats.rankingTypes(t.civ).map {
+            Choice("ip:${it.name}", "Ranking: ${it.label}", "Every civ's ${it.label.lowercase()}, best first", InfoStats.rankEmoji(it))
+        }, "ip:${rt.name}"))
+        val fields = victoryFields(t.civ).let { f -> if (rt == RankingType.Score) f else f.dropLast(1) + rankingField(t.civ, rt) }
         var total = 0
-        for ((name, value) in victoryFields(t.civ)) {
+        // the ranking goes first when the player picked one, so it's never cut off
+        for ((name, value) in if (rt == RankingType.Score) fields else listOf(fields.last()) + fields.dropLast(1)) {
             if (total + value.length > 3600) break
             total += value.length
             t.eb.addField(name.take(256), value.take(1024), false)
@@ -326,9 +373,23 @@ object InfoPlus : Extension {
 
     // ================================================================== 📖 civilopedia
 
-    private const val PAGE = 25
 
     class Cat(val key: String, val label: String, val emoji: String, val list: (Ruleset, GameInfo?) -> Collection<IRulesetObject>)
+
+    /** Civilopedia-only entries Unciv makes up (BaseBelief overviews, movement domains), built once per ruleset so they keep their identity. */
+    private val virtualCache = WeakHashMap<Ruleset, Map<String, List<IRulesetObject>>>()
+    private fun virtual(rs: Ruleset, kind: String): List<IRulesetObject> = virtualCache.getOrPut(rs) {
+        val religions = runCatching { Belief.getCivilopediaReligionEntry(rs) }.getOrElse {
+            Belief().apply { name = "Religions"; civilopediaText = rs.religions.sorted().map { com.unciv.ui.screens.civilopediascreen.FormattedLine(it, icon = "Belief/$it") } }
+        }
+        mapOf(
+            "beliefs" to listOf(Belief.getCivilopediaBeliefsEntry(rs), religions),
+            // CivilopediaCategories.UnitType: virtual "Domain: [Land]"… entries + the unit types some unit uses
+            // (Ruleset.globalUniques is internal to the engine module)
+            "tutorials" to listOfNotNull((Engine.callHiddenResult(rs, "getGlobalUniques") as? com.unciv.models.ruleset.GlobalUniques)?.takeIf { it.hasUniques() }),
+            "unittypes" to runCatching { com.unciv.models.ruleset.unit.UnitType.getCivilopediaIterator(rs).toList() }.getOrDefault(rs.unitTypes.values.toList()),
+        )
+    }[kind].orEmpty()
 
     private val cats = listOf(
         Cat("units", "Units", "⚔️") { rs, _ -> rs.units.values },
@@ -336,26 +397,71 @@ object InfoPlus : Extension {
         Cat("wonders", "Wonders", "🏛️") { rs, _ -> rs.buildings.values.filter { it.isAnyWonder() } },
         Cat("techs", "Technologies", "🔬") { rs, _ -> rs.technologies.values },
         Cat("policies", "Policies", "📜") { rs, _ -> rs.policies.values },
-        Cat("beliefs", "Beliefs", "🙏") { rs, _ -> rs.beliefs.values },
+        // CivilopediaCategories.Belief: the beliefs + Unciv's "Beliefs" and "Religions" overview entries
+        Cat("beliefs", "Religions and beliefs", "🙏") { rs, _ -> rs.beliefs.values + virtual(rs, "beliefs") },
         Cat("resources", "Resources", "💎") { rs, _ -> rs.tileResources.values },
         Cat("improvements", "Tile improvements", "🔨") { rs, _ -> rs.tileImprovements.values },
         Cat("terrains", "Terrains", "🌲") { rs, _ -> rs.terrains.values },
         Cat("promotions", "Promotions", "⭐") { rs, _ -> rs.unitPromotions.values },
-        Cat("unittypes", "Unit types", "🛡️") { rs, _ -> rs.unitTypes.values },
+        Cat("unittypes", "Unit types", "🛡️") { rs, _ -> virtual(rs, "unittypes") },
         Cat("nations", "Nations", "🏳️") { rs, _ -> rs.nations.values.filter { !it.isSpectator } },
         // The Personalities file contains unused chaff: only those some nation uses (CivilopediaCategories.Personality)
         Cat("personalities", "Personalities", "🎭") { rs, _ -> rs.personalities.values.filter { p -> rs.nations.values.any { it.personality == p.name } } },
         Cat("eras", "Eras", "📅") { rs, _ -> rs.eras.values },
         Cat("victories", "Victory types", "🏆") { rs, g -> rs.victories.values.filter { g == null || it.name in g.gameParameters.victoryTypes } },
         Cat("unitnames", "Unit names", "🏷️") { rs, _ -> rs.unitNameGroups.values.filter { it.unitNames.isNotEmpty() && it.getUnits(rs).isNotEmpty() } },
-        Cat("tutorials", "Tutorials", "❓") { rs, _ -> rs.tutorials.values },
+        // CivilopediaCategories.Tutorial: tutorials + the ruleset's Global Uniques when it has any to show
+        Cat("tutorials", "Tutorials", "❓") { rs, _ -> rs.tutorials.values + virtual(rs, "tutorials") },
         Cat("difficulties", "Difficulty levels", "🎚️") { rs, _ -> rs.difficulties.values },
         Cat("speeds", "Game speeds", "⏱️") { rs, _ -> rs.speeds.values },
     )
 
+    // ---- cross-links (FormattedLine.link "Category/Name")
+
+    /** makeLink() -> (category, entry) for every Civilopedia entry of the ruleset. */
+    private val linkIndex = WeakHashMap<Ruleset, Map<String, Pair<Cat, IRulesetObject>>>()
+    private fun linkMap(rs: Ruleset): Map<String, Pair<Cat, IRulesetObject>> = linkIndex.getOrPut(rs) {
+        val m = LinkedHashMap<String, Pair<Cat, IRulesetObject>>()
+        for (c in cats) for (e in runCatching { c.list(rs, null) }.getOrDefault(emptyList())) {
+            val link = runCatching { e.makeLink() }.getOrDefault("")
+            if (link.isNotEmpty()) m.putIfAbsent(link, c to e)
+            m.putIfAbsent("${c.key}|${e.name}", c to e)
+        }
+        m
+    }
+
+    /** Resolve an Unciv link ("Unit/Warrior", "Building/X" for a wonder…) to a Civilopedia entry shown in this game. */
+    fun resolveLink(rs: Ruleset, game: GameInfo?, link: String): Pair<Cat, IRulesetObject>? {
+        val m = linkMap(rs)
+        val name = link.substringAfter('/', "")
+        // Unciv's links say "Building/" for wonders too (and vice versa in older mods)
+        val hit = m[link] ?: m["Wonder/$name"].takeIf { link.startsWith("Building/") } ?: m["Building/$name"].takeIf { link.startsWith("Wonder/") }
+            ?: return null
+        val (cat, e) = hit
+        return if (entries(cat, rs, game).any { it === e || it.name == e.name }) hit else null
+    }
+
+    private val linksCache = WeakHashMap<IRulesetObject, List<String>>()
+
+    /** The entries [e]'s Civilopedia text links to (Unciv's clickable lines), in order, without itself. */
+    fun relatedEntries(e: IRulesetObject, rs: Ruleset, game: GameInfo?): List<Pair<Cat, IRulesetObject>> {
+        val links = linksCache.getOrPut(e) {
+            runCatching { e.assembleCivilopediaText(rs).civilopediaText }.recoverCatching { e.getCivilopediaTextLines(rs) }.getOrDefault(emptyList())
+                .filter { it.linkType == com.unciv.ui.screens.civilopediascreen.FormattedLine.LinkType.Internal }.map { it.link }.distinct()
+        }
+        val self = runCatching { e.makeLink() }.getOrDefault("")
+        return links.filter { it != self }.mapNotNull { resolveLink(rs, game, it) }.filter { it.second.name != e.name }.distinctBy { it.first.key + "|" + it.second.name }
+    }
+
     class PediaState(var cat: String = "units", var item: String? = null, var page: Int = 0)
     private fun pedia(st: PanelState) = st.ext.getOrPut("ip.pedia") { PediaState() } as PediaState
     private fun catOf(ps: PediaState) = cats.firstOrNull { it.key == ps.cat } ?: cats.first()
+    /** Panel's paging key of the entry dropdown */
+    private const val ITEM_KEY = "ip_item"
+    /** Show [name] of [cat], and let the entry dropdown jump to its page. */
+    private fun focus(st: PanelState, cat: Cat, name: String) {
+        val ps = pedia(st); ps.cat = cat.key; ps.item = name; st.pages.remove(ITEM_KEY)
+    }
 
     fun entries(cat: Cat, rs: Ruleset, game: GameInfo?): List<IRulesetObject> =
         runCatching { cat.list(rs, game) }.getOrDefault(emptyList())
@@ -499,25 +605,22 @@ object InfoPlus : Extension {
         val ps = pedia(t.st)
         val cat = catOf(ps)
         val list = entries(cat, rs, t.game)
-        val pages = maxOf(1, (list.size + PAGE - 1) / PAGE)
-        ps.page = ps.page.coerceIn(0, pages - 1)
-        val item = list.firstOrNull { it.name == ps.item } ?: list.getOrNull(ps.page * PAGE)
+        val item = list.firstOrNull { it.name == ps.item } ?: list.firstOrNull()
         ps.item = item?.name
-        val pageItems = list.drop(ps.page * PAGE).take(PAGE)
 
         t.rows += ActionRow.of(t.select("ip_cat", "Category…", cats.map { c ->
             Choice("ip:${c.key}", c.label, "${entries(c, rs, t.game).size} entries", c.emoji)
         }, "ip:${cat.key}"))
-        val range = if (pageItems.isEmpty()) "" else " ${tx(pageItems.first().name).take(2)}–${tx(pageItems.last().name).take(2)}"
-        t.rows += ActionRow.of(t.select("ip_item", "${cat.label}$range (page ${ps.page + 1}/$pages)",
-            pageItems.map { Choice("ip:${it.name}", tx(it.name), shortDesc(it), cat.emoji) }, item?.let { "ip:${it.name}" }))
-        t.rows += ActionRow.of(
-            t.button("ip_pg", "Page", "◀️", 2, ps.page > 0, "-1"),
-            t.button("ip_pg", "Page", "▶️", 2, ps.page < pages - 1, "1"),
-            t.button("ip_nx", "Prev", "⏮️", 2, list.size > 1, "-1"),
-            t.button("ip_nx", "Next", "⏭️", 2, list.size > 1, "1"),
-            t.askButton("ip_search", "Search…", "🔍", 1),
-        )
+        // the whole category: Panel pages it (◀/▶ entries inside the dropdown)
+        t.rows += ActionRow.of(t.select("ip_item", "${cat.label} (${list.size})",
+            list.map { Choice("ip:${it.name}", tx(it.name), shortDesc(it), cat.emoji) }, item?.let { "ip:${it.name}" }))
+        // Unciv's clickable cross-links, as a "Related…" dropdown
+        val related = item?.let { relatedEntries(it, rs, t.game) }.orEmpty()
+        if (related.isNotEmpty()) t.rows += ActionRow.of(t.select("ip_rel", "🔗 Related… (${related.size})",
+            related.map { (c, e) -> Choice("ip:${c.key}|${e.name}".take(100), tx(e.name), c.label, c.emoji) }))
+        t.endRow += t.button("ip_nx", "Prev", "⏮️", 2, list.size > 1, "-1")
+        t.endRow += t.button("ip_nx", "Next", "⏭️", 2, list.size > 1, "1")
+        t.endRow += t.askButton("ip_search", "Search…", "🔍", 1)
         if (item == null) {
             t.eb.addField("📖 ${cat.label}", "Nothing in this category.", false)
             t.worldMap(); return
@@ -541,6 +644,16 @@ object InfoPlus : Extension {
     private fun img(f: File): BufferedImage? = imgCache.getOrPut(f.path) { if (f.isFile) runCatching { ImageIO.read(f) }.getOrNull() else null }
     private fun hexTile(name: String) = img(File(hexDir, "Tiles/$name.png"))
     private fun icon(path: String) = img(File(androidDir, "$path.png"))
+    /** PortraitNation: the nation's icon, or the generic city-state one. */
+    fun nationIcon(nation: Nation): BufferedImage? = icon("Images.NationIcons/NationIcons/${nation.name}")
+        ?: if (nation.isCityState) icon("Images.NationIcons/NationIcons/CityState") else null
+    /** Unciv's icons are black silhouettes the game tints: use the alpha as a mask in [tint]. */
+    fun tinted(iconImg: BufferedImage, tint: Color): BufferedImage {
+        val ic = BufferedImage(iconImg.width, iconImg.height, BufferedImage.TYPE_INT_ARGB)
+        val rgb = tint.rgb and 0xFFFFFF
+        for (y in 0 until iconImg.height) for (x in 0 until iconImg.width) ic.setRGB(x, y, (iconImg.getRGB(x, y) and 0xFF000000.toInt()) or rgb)
+        return ic
+    }
 
     private fun png(i: BufferedImage): ByteArray = ByteArrayOutputStream().also { ImageIO.write(i, "png", it) }.toByteArray()
     private val BG = Color(43, 45, 49)
@@ -628,7 +741,7 @@ object InfoPlus : Extension {
             is Belief -> disc(icon("Images.ReligionIcons/ReligionIcons/${e.name}"), Color(60, 150, 160))
             is Promotion -> disc(icon("Images.UnitPromotionIcons/UnitPromotionIcons/${e.name}")
                 ?: icon("Images.UnitPromotionIcons/UnitPromotionIcons/${e.name.replace(Regex(" [IVX]+$"), "")}"), Color(60, 120, 60))
-            is Nation -> disc(icon("Images.NationIcons/NationIcons/${e.name}"), awt(e.getOuterColor()), awt(e.getInnerColor()))
+            is Nation -> disc(nationIcon(e), awt(e.getOuterColor()), awt(e.getInnerColor()))
             is Victory -> disc(icon("Images.NationIcons/VictoryTypeIcons/${e.name}"), Color(150, 40, 40))
             is com.unciv.models.ruleset.unit.UnitNameGroup -> e.getUnits(rs).firstOrNull()?.let { u ->
                 img(File(hexDir, "Units/${u.name}.png"))?.let { stack(listOfNotNull(hexTile(if (u.isWaterUnit) "Ocean" else "Grassland"), it)) }
@@ -806,6 +919,160 @@ object InfoPlus : Extension {
         t.worldMap()
     }
 
+    // ================================================================== 📜 policy picker / 🔨 improvement picker texts
+
+    /** What a policy does, as one cleaned line (its visible uniques, as PolicyPickerScreen's description). */
+    fun policyEffect(p: Policy): String =
+        p.uniqueObjects.filter { !it.isHiddenToUsers() }.joinToString("; ") { tx(it.getDisplayText()) }
+
+    /** The "Adopt a policy…" option description: the effect, ≤ 100 chars. */
+    fun policyDesc(p: Policy): String {
+        val effect = policyEffect(p).ifEmpty { if (p.branch == p) "Opens the ${p.name} tree" else p.branch.name }
+        val text = if (p.branch == p) "Opens tree: $effect" else effect
+        return if (text.length > 100) text.take(99) + "…" else text
+    }
+
+    private fun policyStatus(civ: Civilization, p: Policy): String {
+        val pm = civ.policies
+        return when {
+            pm.isAdopted(p.name) -> "✅ adopted"
+            pm.isAdoptable(p) -> if (pm.canAdoptPolicy()) "🟢 can adopt now" else "🟡 next when you have the culture"
+            else -> {
+                val missing = p.requires.orEmpty().filter { !pm.isAdopted(it) }
+                "🔒 " + (if (missing.isNotEmpty()) "needs ${missing.joinToString()}" else "locked")
+            }
+        }
+    }
+
+    /** Policies tab: a "📜 Policy details…" dropdown and the full text of the policy picked there. */
+    fun policyDetails(civ: Civilization, st: PanelState, gid: String, eb: EmbedBuilder, rows: MutableList<ActionRow>) {
+        val rs = civ.gameInfo.ruleset
+        val pm = civ.policies
+        val all = rs.policies.values.filter { it.policyBranchType != Policy.PolicyBranchType.BranchComplete }
+        // available ones first, then by branch order (as the policy screen)
+        val ordered = all.sortedWith(compareBy<Policy> { if (pm.isAdoptable(it)) 0 else if (pm.isAdopted(it.name)) 2 else 1 }
+            .thenBy { rs.policyBranches.keys.indexOf(it.branch.name) }.thenBy { it.policyBranchType.ordinal })
+        val sel = (st.ext["ip.pold"] as? String)?.let { rs.policies[it] }
+        if (sel != null) {
+            val head = "${policyStatus(civ, sel)} · ${if (sel.branch == sel) "branch" else sel.branch.name}"
+            eb.addField("📜 ${tx(sel.name)}".take(256), fit(listOf(head) + pediaLines(sel, rs), 1024), false)
+        }
+        rows += ActionRow.of(Panel.selectPublic(Panel.id(gid, "ip_pold"), "📜 Policy details…", ordered.map { p ->
+            val status = policyStatus(civ, p).substringBefore(' ')
+            Choice("ip:${p.name}", "${p.name} (${if (p.branch == p) "branch" else p.branch.name})", policyDesc(p),
+                status.takeIf { it.isNotBlank() } ?: "📜")
+        }, sel?.let { "ip:${it.name}" }, true))
+    }
+
+    private val statEmojiShort = mapOf(Stat.Food to "🍞", Stat.Production to "⚙️", Stat.Gold to "💰", Stat.Science to "🔬",
+        Stat.Culture to "🎭", Stat.Happiness to "😊", Stat.Faith to "🙏")
+
+    fun statsText(stats: Stats): String = stats.mapNotNull { (stat, value) ->
+        val v = (value * 10).roundToInt() / 10f
+        if (v == 0f) null else (if (v > 0) "+" else "") + (if (v == v.toInt().toFloat()) v.toInt().toString() else v.toString()) + (statEmojiShort[stat] ?: stat.name)
+    }.joinToString(" ")
+
+    /** ImprovementPickerScreen.addImprovementRow, as text: turns, yield change on this tile (incl. maintenance),
+     *  resource provided, "Replaces [X]", "Not in city work range". */
+    fun improvementInfo(u: MapUnit, imp: TileImprovement, turns: Int? = null): List<String> {
+        val civ = u.civ
+        val tile = u.getTile()
+        val gv = GameView(civ.gameInfo, civ)
+        val tv = gv.getTile(tile)
+        val parts = ArrayList<String>()
+        val t = turns ?: if (tile.improvementInProgress == imp.name) tile.turnsToImprovement else imp.getTurnsToBuild(civ, u)
+        if (t > 0) parts += "$t turns"
+        val stats = runCatching { tv.getStatDiffForAlternative(setImprovement = imp).also { it.add(tv.getImprovementMaintenance(imp, gv.civView)) } }.getOrNull()
+        val st = stats?.let { statsText(it) }.orEmpty()
+        if (st.isNotEmpty()) parts += st
+        val res = tile.tileResource?.takeIf { civ.canSeeResource(it) }
+        if (res != null && res.isImprovedBy(imp.name)) parts += "provides ${res.name}"
+        val replaces = !imp.isRoad() && !imp.name.startsWith(Constants.remove) && imp.name != Constants.cancelImprovementOrder
+        if (tile.improvement != null && replaces) parts += "⚠️ Replaces ${tile.improvement}" +
+            (if (res != null && res.isImprovedBy(tile.improvement!!)) " (loses ${res.name})" else "")
+        if (tile.getOwner() != null && !imp.isRoad() && (stats?.max() ?: 0f) > 0f && !imp.name.startsWith(Constants.remove) &&
+            !tv.getExploredTilesInDistance(civ.gameInfo.ruleset.modOptions.constants.cityWorkRange).any { it.isCityCenter() && it.getOwner()?.getCiv() == civ })
+            parts += "not in city work range"
+        return parts
+    }
+
+    /** The "Build …" option description (≤ 100 chars). */
+    fun improvementDesc(u: MapUnit, imp: TileImprovement, turns: Int): String =
+        runCatching { improvementInfo(u, imp, turns).joinToString(" · ") }.getOrDefault("$turns turns").let { if (it.length > 100) it.take(99) + "…" else it }
+
+    /** ImprovementPickerScreen.getProblemReport: null = don't show; empty = buildable; else what to do first. */
+    fun improvementProblems(u: MapUnit, imp: TileImprovement, mayRemoveLastTerrain: Boolean? = null): List<String>? {
+        val civ = u.civ
+        val rs = civ.gameInfo.ruleset
+        val gv = GameView(civ.gameInfo, civ)
+        val tv = gv.getTile(u.getTile())
+        val uv = gv.getMapUnitView(u)
+        val lastTerrain = u.getTile().allTerrains.last().name
+        val canRemove = mayRemoveLastTerrain ?: (Constants.remove + lastTerrain in rs.tileImprovements)
+        fun reportable(p: Collection<com.unciv.logic.map.tile.ImprovementBuildingProblem>) = p.all { it.reportable }
+        var problems = tv.getImprovementBuildingProblems(imp, uv)
+        var suggestRemoval = false
+        if (!reportable(problems) && canRemove) {
+            problems = tv.getImprovementBuildingProblems(imp, uv, pretendLastTerrainRemoved = true)
+            if (!reportable(problems)) return null
+            suggestRemoval = true
+        }
+        if (!reportable(problems)) return null
+        val out = LinkedHashSet<String>()
+        if (suggestRemoval) rs.tileImprovements[Constants.remove + lastTerrain]?.let { rem ->
+            improvementProblems(u, rem, false)?.let { out.addAll(it) }
+            out += "Remove $lastTerrain first"
+        }
+        val maxEras = rs.modOptions.constants.maxImprovementTechErasForward.takeUnless { it < 0 } ?: Int.MAX_VALUE
+        if (com.unciv.logic.map.tile.ImprovementBuildingProblem.MissingTech in problems) {
+            val maxEra = if (maxEras == Int.MAX_VALUE) Int.MAX_VALUE else civ.getEra().eraNumber
+            for (tech in imp.requiredTechnologies(rs)) {
+                val era = tech?.era(rs) ?: continue
+                if (civ.tech.isResearched(tech.name)) continue
+                if (era.eraNumber > maxEra) return null
+                out += "Research ${tech.name} first"
+            }
+        }
+        if (com.unciv.logic.map.tile.ImprovementBuildingProblem.NotJustOutsideBorders in problems) out += "Have this tile close to your borders"
+        if (com.unciv.logic.map.tile.ImprovementBuildingProblem.OutsideBorders in problems) out += "Have this tile inside your empire"
+        if (com.unciv.logic.map.tile.ImprovementBuildingProblem.MissingResources in problems) {
+            fun need(name: String, amount: Int) { if (civ.getResourceAmount(name) < amount) out += "Acquire more $name" }
+            for (un in imp.getMatchingUniques(UniqueType.ConsumesResources)) need(un.params[1], un.params[0].toInt())
+            for ((name, amount) in imp.getStockpiledResourceRequirements(u.cache.state)) need(name, amount)
+        }
+        return out.toList()
+    }
+
+    /** Improvements this worker can't build here yet, with what to do first (shown after the "Build …" options). */
+    fun blockedImprovementChoices(u: MapUnit): List<Choice> {
+        val tile = u.getTile()
+        val out = ArrayList<Choice>()
+        for (imp in u.civ.gameInfo.ruleset.tileImprovements.values) {
+            if (imp.turnsToBuild == -1 || imp.name == tile.improvement || imp.name == tile.improvementInProgress) continue
+            if (!u.canBuildImprovement(imp)) continue
+            val why = runCatching { improvementProblems(u, imp) }.getOrNull() ?: continue
+            // empty = buildable (listed as "Build …"); only "remove the forest first" = CityPlus' "…, then build" option
+            if (why.isEmpty() || why.size == 1 && why[0].startsWith("Remove ")) continue
+            out += Choice("do:ip_impwhy:${imp.name}".take(100), "🚫 ${imp.name}", why.joinToString(" · ").take(100), "🔒")
+        }
+        return out
+    }
+
+    /** Picking a blocked improvement just explains it (Unciv shows it greyed out with the reasons). */
+    fun improvementWhy(u: MapUnit, name: String): String {
+        val imp = u.civ.gameInfo.ruleset.tileImprovements[name] ?: throw PlayerError("Unknown improvement.")
+        val why = improvementProblems(u, imp)
+        val info = runCatching { improvementInfo(u, imp) }.getOrDefault(emptyList())
+        val head = when {
+            why == null -> "🚫 **${imp.name}** can't be built here."
+            why.isEmpty() -> "🔨 **${imp.name}** can be built here — pick **Build ${imp.name}**."
+            else -> "🔒 **${imp.name}**: " + why.joinToString(" · ")
+        }
+        return head + (if (info.isNotEmpty()) "\n  ↳ " + info.joinToString(" · ") else "") +
+            (runCatching { imp.getDescription(u.civ.gameInfo.ruleset) }.getOrDefault("").lines().map { tx(it) }.filter { it.isNotBlank() }
+                .joinToString(" · ").take(400).let { if (it.isEmpty()) "" else "\n  ↳ $it" })
+    }
+
     // ================================================================== self-test
 
     override fun selfTest(t: SelfTestCtx) {
@@ -935,7 +1202,158 @@ object InfoPlus : Extension {
         t.render(a, "ip-pedia-unitnames")
         t.act(a, "ip_cat", emptyList(), "ip:personalities", null); t.render(a, "ip-pedia-personality")
 
+        newFeatureTests(t)
         InfoStats.selfTest(t)
         t.act(a, "tab", emptyList(), "UNITS", null)
+    }
+
+    /** Rankings by every stat, Civilopedia cross-links + extra entries, policy / improvement picker texts. */
+    private fun newFeatureTests(t: SelfTestCtx) {
+        val a = t.alice
+        fun check(ok: Boolean, what: String) { if (!ok) throw IllegalStateException("InfoPlus: $what") }
+        val st = t.ctl.state(t.s.meta.id, a.userId)
+        fun panel() = t.eng { Panel.render(t.s, a, st) }
+        fun limitsOk(tag: String) {
+            val r = panel()
+            check(r.embed.length <= 6000 && r.embed.fields.size <= 25 && r.embed.fields.all { (it.value?.length ?: 0) <= 1024 }, "$tag embed limits")
+            check(r.rows.size <= 5 && r.rows.all { row -> row.components.size <= 5 }, "$tag rows")
+        }
+
+        // ---- 🏅 rankings by every stat (VictoryScreenCivRankings), with the privacy rules
+        val saved = t.eng { g -> val p = g.gameParameters; Triple(p.showRankings, p.hideOtherCivilizationStats, p.showCivilizationStats)
+            .also { p.showCivilizationStats = true; p.showRankings = true; p.hideOtherCivilizationStats = false } }
+        try {
+            check(t.act(a, "tab", emptyList(), VICTORY, null), "victory tab")
+            check(t.act(a, "ip_vrank", emptyList(), "ip:Population", "rankings by every stat (victory tab dropdown)"), "pick ranking")
+            check(st.ext["ip.vrank"] == "Population", "ranking not stored")
+            limitsOk("victory ranking"); t.render(a, "ip-victory-rank-population")
+            val problems = t.eng { g ->
+                val civ = GameOps.civOf(g, a)
+                val out = ArrayList<String>()
+                val majors = g.civilizations.count { it.isMajorCiv }
+                for (rt in InfoStats.rankingTypes(civ)) {
+                    val (name, body) = rankingField(civ, rt)
+                    if (body.length > 1024) out += "${rt.name} too long"
+                    if (body.lines().count { Regex("^\\d+\\.").containsMatchIn(it) } != minOf(12, majors)) out += "${rt.name}: not every civ listed: $body"
+                    if (rt == RankingType.Gold) println("  [rank] $name: ${body.replace("\n", " | ").take(300)}")
+                }
+                val stranger = g.civilizations.firstOrNull { it.isMajorCiv && it != civ && !civ.knows(it) && !it.isDefeated() }
+                if (stranger != null && !rankingField(civ, RankingType.Production).second.contains("an unknown civ")) out += "unknown civ named in rankings"
+                if (stranger != null && rankingField(civ, RankingType.Production).second.contains(stranger.civName)) out += "stranger's name leaked"
+                g.gameParameters.hideOtherCivilizationStats = true
+                if (rankingField(civ, RankingType.Gold).second.lines().count { Regex("^\\d+\\.").containsMatchIn(it) } != 1) out += "hidden stats still ranked"
+                g.gameParameters.hideOtherCivilizationStats = false; g.gameParameters.showRankings = false
+                if (!rankingField(civ, RankingType.Gold).second.contains("hidden")) out += "rankings shown with showRankings off"
+                if (Panel.render(t.s, a, st).rows.any { r -> r.components.any { (it as? net.dv8tion.jda.api.interactions.components.selections.StringSelectMenu)?.id?.contains("ip_vrank") == true } })
+                    out += "ranking dropdown shown with showRankings off"
+                g.gameParameters.showRankings = true
+                out
+            }
+            check(problems.isEmpty(), problems.joinToString("; "))
+            check(!t.act(a, "ip_vrank", emptyList(), "ip:Nonsense", null), "bad ranking accepted")
+            t.act(a, "ip_vrank", emptyList(), "ip:Score", null)
+        } finally { t.eng { g -> val p = g.gameParameters; p.showRankings = saved.first; p.hideOtherCivilizationStats = saved.second; p.showCivilizationStats = saved.third } }
+
+        // ---- 📖 Civilopedia: Unciv's extra entries (BaseBelief overviews, Global Uniques, movement domains)
+        val extra = t.eng { g ->
+            fun names(k: String) = entries(cats.first { it.key == k }, g.ruleset, g).map { it.name }
+            Triple(names("beliefs").filter { it == "Beliefs" || it == "Religions" }, names("tutorials").filter { it == "Global Uniques" }, names("unittypes").filter { it.startsWith("Domain:") })
+        }
+        println("  [pedia] extra entries: $extra")
+        check(extra.first.size == 2 && extra.second.size == 1 && extra.third.isNotEmpty(), "missing Unciv pedia entries: $extra")
+        t.act(a, "tab", emptyList(), PEDIA, null)
+        for ((k, n, tag) in listOf(Triple("beliefs", "Religions", "ip-pedia-religions"), Triple("tutorials", "Global Uniques", "ip-pedia-globaluniques"), Triple("unittypes", extra.third.first(), null))) {
+            t.act(a, "ip_cat", emptyList(), "ip:$k", null)
+            check(t.act(a, "ip_item", emptyList(), "ip:$n", if (tag == null) null else "civilopedia Beliefs/Religions/Global Uniques/Domain entries"), "entry $n")
+            val body = t.eng { g -> pediaLines(entries(cats.first { it.key == k }, g.ruleset, g).first { it.name == n }, g.ruleset) }
+            println("  [pedia] $n: ${body.joinToString(" | ").take(240)}")
+            check(body.isNotEmpty() && !body.first().startsWith("_No Civilopedia"), "$n has no text")
+            if (tag != null) t.render(a, tag)
+        }
+
+        // ---- 🔗 cross-links: every entry's links resolve; Warrior offers Related… and it jumps
+        val linkStats = t.eng { g -> cats.associate { c -> c.key to entries(c, g.ruleset, g).sumOf { relatedEntries(it, g.ruleset, g).size } } }
+        println("  [pedia] links per category: $linkStats")
+        check(linkStats.values.sum() > 100, "too few cross-links: $linkStats")
+        t.act(a, "ip_cat", emptyList(), "ip:units", null)
+        t.act(a, "ip_item", emptyList(), "ip:Warrior", null)
+        val rel = t.eng { g -> relatedEntries(g.ruleset.units["Warrior"]!!, g.ruleset, g) }
+        println("  [pedia] Warrior related: ${rel.map { "${it.first.key}/${it.second.name}" }}")
+        check(rel.isNotEmpty(), "Warrior has no related entries")
+        check(panel().rows.any { r -> r.components.any { (it as? net.dv8tion.jda.api.interactions.components.selections.StringSelectMenu)?.id?.contains("ip_rel") == true } }, "no Related… dropdown")
+        limitsOk("pedia related"); t.render(a, "ip-pedia-related")
+        val target = rel.first()
+        check(t.act(a, "ip_rel", emptyList(), "ip:${target.first.key}|${target.second.name}", "civilopedia cross-links (Related… dropdown)"), "follow link")
+        check(pedia(st).item == target.second.name && pedia(st).cat == target.first.key, "link went to ${pedia(st).cat}/${pedia(st).item}")
+        check(!t.act(a, "ip_rel", emptyList(), "ip:units|Nonexistent Unit", null), "bad link accepted")
+        // a wonder linked as "Building/…" still resolves
+        check(t.eng { g -> resolveLink(g.ruleset, g, "Building/The Great Library")?.first?.key } == "wonders", "Building/ link to a wonder")
+        // the entry dropdown pages itself: Next keeps the right page
+        repeat(30) { t.act(a, "ip_nx", listOf("1"), null, null) }
+        limitsOk("pedia page"); t.render(a, "ip-pedia-paged")
+
+        // ---- 📜 policy picker: effects in the option descriptions, full text via "Policy details…"
+        val pol = t.eng { g ->
+            val civ = GameOps.civOf(g, a)
+            val ps = g.ruleset.policies.values.filter { it.policyBranchType != com.unciv.models.ruleset.Policy.PolicyBranchType.BranchComplete }
+            val bad = ps.filter { policyDesc(it).length > 100 || policyDesc(it).isBlank() }.map { it.name }
+            val sample = ps.first { it.branch != it && policyEffect(it).isNotEmpty() }
+            println("  [policy] ${sample.name}: ${policyDesc(sample)} · Tradition: ${g.ruleset.policies["Tradition"]?.let { policyDesc(it) }}")
+            println("  [policy] picker now: ${GameOps.policyChoices(civ).take(3).map { "${it.label}: ${it.description}" }}")
+            Triple(bad, sample.name, GameOps.policyChoices(civ).all { c -> c.description.length <= 100 && g.ruleset.policies[c.id.removePrefix("pol:")]?.let { p -> p.branch == p || c.description != p.branch.name } != false })
+        }
+        check(pol.first.isEmpty(), "bad policy descriptions: ${pol.first}")
+        check(pol.third, "policy picker still shows only the branch")
+        check(t.act(a, "tab", emptyList(), "POLICIES", null), "policies tab")
+        check(t.act(a, "ip_pold", emptyList(), "ip:${pol.second}", "policy details (effects in picker + Policy details… dropdown)"), "policy details")
+        val pf = panel().embed.fields.firstOrNull { it.name?.contains(pol.second) == true }
+        println("  [policy] details field: ${pf?.value?.replace("\n", " | ")?.take(300)}")
+        check(pf != null && (pf.value?.length ?: 0) > 20, "no policy details field")
+        limitsOk("policies"); t.render(a, "ip-policy-details")
+        check(!t.act(a, "ip_pold", emptyList(), "ip:Nonsense", null), "bad policy accepted")
+
+        // ---- 🔨 improvement picker: yield change, Replaces [X], blocked improvements with their reason
+        val wid = t.eng { g ->
+            val civ = GameOps.civOf(g, a)
+            if ("Agriculture" in g.ruleset.technologies) civ.tech.addTechnology("Agriculture")
+            val city = civ.cities.first()
+            val tile = city.getTiles().firstOrNull { it.isLand && !it.isCityCenter() && it.civilianUnit == null && it.militaryUnit == null && !it.isImpassible() && it.improvementInProgress == null && it.resource == null && it.terrainFeatures.isEmpty() }
+                ?: city.getTiles().first { it.isLand && !it.isCityCenter() && it.civilianUnit == null && it.militaryUnit == null && !it.isImpassible() }
+            tile.setBaseTerrain(g.ruleset.terrains["Grassland"]!!)
+            tile.setTileResource(null as String?); tile.removeImprovement(); tile.stopWorkingOnImprovement()
+            for (f in tile.terrainFeatures.toList()) tile.removeTerrainFeature(f)
+            tile.setTerrainTransients()
+            val w = civ.units.placeUnitNearTile(tile.position, "Worker")!!
+            check(w.getTile() == tile, "worker not on the test tile")
+            w.currentMovement = w.getMaxMovement().toFloat()
+            w.id
+        }
+        t.act(a, "tab", emptyList(), "UNITS", null)
+        t.act(a, "selunit", emptyList(), "u:$wid", null)
+        fun worker(g: GameInfo) = GameOps.unitById(GameOps.civOf(g, a), wid)!!
+        val ch = t.eng { g -> GameOps.unitChoices(worker(g)) }
+        val farm = ch.firstOrNull { it.id == "imp:Farm" }
+        val blocked = ch.filter { it.id.startsWith("do:ip_impwhy:") }
+        println("  [improve] Farm: ${farm?.description} · blocked: ${blocked.map { "${it.label}: ${it.description}" }}")
+        check(farm != null && farm.description.contains("🍞") && farm.description.contains("turns"), "Farm shows no yield change: ${farm?.description}")
+        check(blocked.isNotEmpty() && blocked.all { it.description.isNotBlank() }, "no blocked improvements with reasons")
+        check(blocked.any { it.description.contains("Research") }, "no 'Research X first' reason")
+        limitsOk("units improvements"); t.render(a, "ip-improvement-picker")
+        check(t.act(a, "uact", emptyList(), blocked.first().id, "improvement picker: blocked improvements with reasons"), "pick blocked")
+        println("  [improve] why: ${st.flash.lastOrNull()?.replace("\n", " | ")}")
+        check(st.flash.lastOrNull()?.contains("🔒") == true, "no reason shown")
+        // an existing improvement: the others warn "Replaces [X]"
+        val replaced = t.eng { g ->
+            val tile = worker(g).getTile()
+            val other = g.ruleset.tileImprovements.values.first { it.name != "Farm" && !it.isRoad() && it.turnsToBuild > 0 && !it.name.startsWith(Constants.remove) && it.uniqueTo == null }
+            tile.setImprovement(other.name)
+            val d = GameOps.unitChoices(worker(g)).firstOrNull { it.id == "imp:Farm" }?.description
+            tile.removeImprovement()
+            other.name to d
+        }
+        println("  [improve] with ${replaced.first}: Farm -> ${replaced.second}")
+        check(replaced.second?.contains("Replaces ${replaced.first}") == true, "no 'Replaces' warning")
+        check(t.act(a, "uact", emptyList(), "imp:Farm", "improvement picker: yield change + Replaces warning"), "build farm")
+        t.eng { g -> worker(g).getTile().stopWorkingOnImprovement(); worker(g).destroy() }
     }
 }
