@@ -753,6 +753,7 @@ class Bot(override val store: Store, override val ctl: Controller) : ListenerAda
 
         **🤖 Auto-pick** lets the AI fill in anything you skipped. **✅ End turn** passes play on; AIs move automatically.
 
+        🔁 `/civ autoplay turns:N` lets the AI play your next N turns (any click stops it).
         `/civ play` panel · `/civ board` re-post board · `/civ spectate` watch · `/civ leave` hand your civ to the AI
         Host: `/civ kick @player` · `/civ host @player` · `/civ end` · `/civ lobby` (mods, map, scenario) · `/civ setup` (every other option) · `/civ save import` · `/civ espionage` · `/civ rollback` (players vote)
         Admins: `/civ mod` (browse + install Unciv mods from GitHub) · `/civ map` (upload custom maps) · Anyone: `/civ wiki` · Players: `/civ save export` (download the game for desktop Unciv once it's over)
