@@ -223,7 +223,7 @@ object Features {
     // ================================================================== city management
 
     private val focusEmoji = mapOf(
-        CityFocus.NoFocus to "⚖️", CityFocus.FoodFocus to "🍞", CityFocus.ProductionFocus to "⚙️", CityFocus.GoldFocus to "💰",
+        CityFocus.NoFocus to "⚖️", CityFocus.Manual to "✋", CityFocus.FoodFocus to "🍞", CityFocus.ProductionFocus to "⚙️", CityFocus.GoldFocus to "💰",
         CityFocus.ScienceFocus to "🔬", CityFocus.CultureFocus to "🎭", CityFocus.FaithFocus to "🙏",
         CityFocus.GoldGrowthFocus to "📈", CityFocus.ProductionGrowthFocus to "🏭",
     )
@@ -239,7 +239,7 @@ object Features {
         // Same focus list as Unciv's CitizenManagementTable (tableEnabled, Faith only with religion on)
         for ((focus, e) in focusEmoji) if (focus != city.getCityFocus() && focus.tableEnabled &&
             (focus != CityFocus.FaithFocus || city.civ.gameInfo.isReligionEnabled()))
-            out += Choice("focus:${focus.name}", "Focus: ${GameOps.focusName(focus)}", "Citizens favour this", e)
+            out += Choice("focus:${focus.name}", "Focus: ${GameOps.focusName(focus)}", if (focus == CityFocus.Manual) "Citizens stay on the tiles you pick" else "Citizens favour this", e)
         val buyable = city.tilesInRange.filter { city.expansion.canBuyTile(it) }
             .map { it to city.expansion.getGoldCostOfTile(it) }.sortedBy { it.second }
         for ((t, cost) in buyable) {
@@ -407,7 +407,9 @@ object Features {
 
     /** After a fight: flag newly captured cities so the panel asks the player what to do with them. */
     fun flagNewConquests(civ: Civilization, citiesBefore: Set<String>) {
-        for (c in civ.cities) if (c.id !in citiesBefore && c.foundingCivObject != civ && c.turnAcquired == civ.gameInfo.turns)
+        // Unciv's Battle.conquerCity asks about every capture except retaking your own original capital (re-annexed at once)
+        for (c in civ.cities) if (c.id !in citiesBefore && c.previousOwner.isNotEmpty() && c.previousOwner != civ.civID &&
+            !(c.isOriginalCapital && c.foundingCivObject == civ) && c.turnAcquired == civ.gameInfo.turns)
             if (civ.popupAlerts.none { it.type == AlertType.CityConquered && it.value == c.id })
                 civ.popupAlerts.add(PopupAlert(AlertType.CityConquered, c.id))
     }
