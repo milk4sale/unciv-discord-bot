@@ -356,10 +356,11 @@ object Panel {
                 rows += ActionRow.of(multiSelect(id(gid, "ask"), "You ask for…", askC, st.ask, myTurn))
                 val atWar = other != null && civ.isAtWarWith(other)
                 endRow += btn(gid, "trade", "Propose deal", "🤝", 1, myTurn && other != null && (st.give.isNotEmpty() || st.ask.isNotEmpty()))
-                endRow += if (atWar) btn(gid, "peace", "Peace", "🕊️", 3, myTurn)
-                else btn(gid, "war", "War", "🔥", 4, myTurn && other != null)
-                endRow += if (other != null && Features.friendshipAvailable(civ, other)) btn(gid, "friend", "Friendship", "💛", 2, myTurn)
-                else btn(gid, "denounce", "Denounce", "😠", 2, myTurn && other != null && Features.canDenounce(civ, other))
+                // War/Denounce open DiplomacyPlus's ⚠️ confirm step; Peace shows the post-war lock (like Unciv)
+                endRow += if (atWar) btn(gid, "peace", DiplomacyPlus.peaceLabel(civ, other!!), "🕊️", 3, myTurn && DiplomacyPlus.peaceBlocker(civ, other) == null)
+                else btn(gid, "dp_war", other?.let { DiplomacyPlus.warLabel(civ, it) } ?: "War", "🔥", 4, myTurn && other != null)
+                endRow += btn(gid, "friend", "Friendship", "💛", 2, myTurn && other != null && Features.friendshipAvailable(civ, other))
+                endRow += btn(gid, "dp_denounce", "Denounce", "😠", 2, myTurn && other != null && Features.canDenounce(civ, other))
                 includeAdvisor = false
                 file = wholeMapFile(game, civ)
             }
@@ -371,6 +372,7 @@ object Panel {
                 if (cs == null) eb.addField("🏰 City-states", "You haven't met any city-states yet. Explore!", false)
                 else {
                     eb.addField("🏰 ${cs.civName}", Features.cityStateInfo(civ, cs).take(1024), false)
+                    for ((name, value) in DiplomacyPlus.cityStateFields(civ, cs)) eb.addField(name, value.take(1024), false)
                     val others = css.filter { it != cs }.take(12).joinToString("\n") { o ->
                         "${o.civName} — ${o.getDiplomacyManager(civ)?.getInfluence()?.toInt() ?: 0} influence" + (o.allyCiv?.let { " · ally: ${it.civName}" } ?: "")
                     }
@@ -381,8 +383,8 @@ object Panel {
                     cs?.let { "cs:${it.civID}" }))
                 rows += ActionRow.of(select(id(gid, "csact"), "Gift, protect, demand tribute…", cs?.let { Features.cityStateChoices(civ, it) } ?: emptyList(), enabled = myTurn))
                 if (cs != null) {
-                    endRow += if (civ.isAtWarWith(cs)) btn(gid, "peace", "Peace", "🕊️", 3, myTurn, "cs")
-                    else btn(gid, "war", "War", "🔥", 4, myTurn, "cs")
+                    endRow += if (civ.isAtWarWith(cs)) btn(gid, "peace", DiplomacyPlus.peaceLabel(civ, cs), "🕊️", 3, myTurn && DiplomacyPlus.peaceBlocker(civ, cs) == null, "cs")
+                    else btn(gid, "dp_war", DiplomacyPlus.warLabel(civ, cs), "🔥", 4, myTurn, "cs")
                 }
                 file = cs?.getCapital()?.let { mapFile(game, civ, st, it.getCenterTile(), Overlay(selectedTile = it.getCenterTile())) } ?: wholeMapFile(game, civ)
             }

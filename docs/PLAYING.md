@@ -192,23 +192,51 @@ a second belief, and some bonuses grant **extra beliefs for your religion**. Cho
 
 - Lists every civilization you've met, with your relationship and their score.
 - **Choose a civilization**, then build a deal:
-  - **You give…** and **You ask for…** let you pick several items each: gold (one-off amounts),
-    gold per turn, luxury and strategic resources, technologies, **cities**, embassies, open
-    borders, research agreements, defensive pacts, **declaring war on a third civ**, and peace when
-    at war.
-  - **🤝 Propose deal:** AIs answer right away. A human player gets the offer in the game thread
-    with **Accept / Decline** buttons.
-- **🔥 War** declares war, and **🕊️ Peace** proposes peace when you're at war.
-- **💛 Friendship** proposes a Declaration of Friendship. When friendship isn't possible, that
-  slot shows **😠 Denounce** instead.
+  - **You give…** and **You ask for…** let you pick several items each: gold (preset amounts or
+    **✏️ Custom amount…**, which asks you for any number), gold per turn (same), luxury resources
+    (one copy per deal, like in Unciv), strategic resources, **cities**, embassies, open borders,
+    research agreements, defensive pacts, **declaring war on a third civ**, introductions, and peace
+    when at war. (This version of Unciv doesn't trade technologies.)
+  - Treaties (peace, research agreement, defensive pact) are signed by **both** sides, so picking one
+    puts it on both sides of the deal. A research agreement costs both of you gold; if your partner
+    can't afford it, the deal adds the missing gold from you automatically (and the other way round).
+  - **🤝 Propose deal:** AIs answer right away (an AI signs a defensive pact only if it sees you as an
+    ally). A human player gets the offer in the game thread with **Accept / Decline** buttons.
+- **🔥 War** first shows what declaring war would cause — broken promises, their defensive-pact
+  allies joining in, your own pacts being cancelled — and asks you to **⚠️ confirm**. While a peace
+  treaty is running the button shows the turns left (`War (5⏳)`).
+- **🕊️ Peace** proposes peace when you're at war. After a declaration of war nobody can talk peace
+  for **10 turns**; the button shows the turns left (`Peace (7⏳)`).
+- **💛 Friendship** proposes a Declaration of Friendship; **😠 Denounce** (30 turns, asks you to
+  confirm first) sits next to it. Each is greyed out when it isn't possible.
+
+### 🧭 Relations
+
+- **How they see you:** their opinion of you and every reason behind it (gifts, friendship,
+  warmongering, broken promises…).
+- **Promises** both sides made (not to settle nearby, not to spy, not to spread religion) with the
+  turns left, and demands still waiting for an answer.
+- **Deals and treaties:** running deals (resources, gold per turn, research agreements, pacts) with
+  the turns left, friendship and denunciations.
+- **World politics:** who is at war with whom, defensive pacts, friendships, denunciations and
+  city-state alliances among the civilizations you know.
+- **📢 Make a demand:** ask them to stop settling near you, spreading religion or spying. An AI
+  answers on its turn; a human finds it in their 📨 Inbox.
 
 ### 🏰 City-states
 
-- Pick a city-state to see its type, your **influence**, its current **ally**, its protectors
-  and **quests it has for you**.
-- **Actions:** gift 250/500/1000 gold, pledge or withdraw protection, and demand gold or a
-  worker as tribute (only listed when they'd actually give in).
-- **War / Peace** with city-states is here too.
+- Pick a city-state to see its type and personality, your **influence**, its **ally** (and the
+  ally's influence), protectors, how many turns until your relationship drops a level, the
+  **bonuses** it gives friends and allies, the resources its ally gets, its unique unit, and its
+  **quests** with their influence reward and turns left (including requests to fight a major civ).
+- **💰 Tribute willingness** breaks down how willing they are to pay you (0 or more: gold; 30 or
+  more and a size-4 city: a worker).
+- **Actions:** gift 250/500/1000 gold, **gift an improvement** for one of their resources (200
+  gold, needs 60 influence), pledge or withdraw protection, demand gold or a worker as tribute, and
+  — for civilizations with that ability — a **💍 Diplomatic Marriage** that brings an allied
+  city-state's cities into your empire.
+- **War / Peace** with city-states is here too. War asks you to confirm; peace is accepted at once,
+  except while you're at war with the city-state's ally.
 
 ### 🕵️ Espionage
 

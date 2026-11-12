@@ -599,7 +599,9 @@ class Bot(override val store: Store, override val ctl: Controller) : ListenerAda
         // Popups: a "prompt" button (args = verb[, arg]) or a select option valued "ask:<verb>[:<arg>]"
         val ask = when {
             verb == "prompt" -> args
-            value != null && value.startsWith("ask:") -> value.removePrefix("ask:").split(":", limit = 2)
+            // (any picked value: a multi-select sends its other picks too)
+            value != null && value.split("\n").any { it.startsWith("ask:") } ->
+                value.split("\n").first { it.startsWith("ask:") }.removePrefix("ask:").split(":", limit = 2)
             else -> null
         }
         if (ask != null && ask.isNotEmpty()) {
@@ -636,7 +638,7 @@ class Bot(override val store: Store, override val ctl: Controller) : ListenerAda
         sendPanel(hook, s, seat, edit = true)
         if (result != null) announceTurn(s, result)
         while (true) { val p = ctl.outbox.poll() ?: break; postProposal(s, p) }
-        if (verb in setOf("war", "end", "trade", "peace", "friend", "denounce")) updateBoard(s)
+        if (verb in setOf("war", "end", "trade", "peace", "friend", "denounce", "dp_ok")) updateBoard(s)
     }
 
     private fun showPanel(hook: InteractionHook, s: Session, uid: String) {
