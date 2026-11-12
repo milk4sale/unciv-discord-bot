@@ -142,8 +142,12 @@ walks you through every click.
 ## Credits and license
 
 - Game engine, rules and art: **[Unciv](https://github.com/yairm210/Unciv)** by yairm210 and
-  contributors (Mozilla Public License 2.0). The map tiles are Unciv's *FantasyHex* tileset; see
-  Unciv's credits for the artists. CivBot downloads Unciv at build time and doesn't redistribute it.
-- Discord library: [JDA](https://github.com/discord-jda/JDA).
-- CivBot itself is released under the **Mozilla Public License 2.0** (see [LICENSE](LICENSE)),
-  the same license as Unciv.
+  contributors (Mozilla Public License 2.0). CivBot downloads Unciv at build time and doesn't
+  redistribute it.
+- Map tiles: the *Fantasy Hex* tileset by [CuddlyClover](https://cuddlyclover.itch.io/fantasy-hex-tiles)
+  with additions by Unciv contributors (CC BY 4.0). Other sprites: see
+  [Unciv's credits](https://github.com/yairm210/Unciv/blob/master/docs/Credits.md).
+- Discord library: [JDA](https://github.com/discord-jda/JDA) (Apache 2.0).
+- CivBot's own code and docs are released under the **WTFPL** (see [LICENSE](LICENSE)): do
+  whatever you want with them. This doesn't cover Unciv, JDA or the game art shown in
+  `docs/images/` and drawn by the bot, which keep their own licenses above.
