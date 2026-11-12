@@ -104,11 +104,31 @@ object GameOps {
             }
         }
         Extensions.all.forEach { it.applyToSetup(setup, meta) }
-        val game = GameStarter.startNewGame(setup)
+        val game = startWithRetries(setup, seedChosen = s.extra[SetupPlus.K_SEED] != null)
         for (seat in meta.seats) {
             seat.civId = game.civilizations.first { it.playerId == "discord:${seat.userId}" }.civID
         }
         return game
+    }
+
+    /**
+     * Unciv's map generator now and then makes a map it can't place civilizations on ("No
+     * Continents on this map!", or no room for every start). With a random seed, just roll a new
+     * map, like pressing Start again in Unciv. With a seed the host picked, say so instead.
+     */
+    private fun startWithRetries(setup: GameSetupInfo, seedChosen: Boolean): GameInfo {
+        var last: Exception? = null
+        repeat(if (seedChosen || setup.mapFile != null || setup.mapParameters.name.isNotEmpty()) 1 else 5) { attempt ->
+            if (attempt > 0) {
+                org.slf4j.LoggerFactory.getLogger("GameOps").warn("Map generation failed ({}), trying another map", last?.message)
+                setup.mapParameters.seed = kotlin.random.Random.nextLong()
+            }
+            try { return GameStarter.startNewGame(setup) } catch (e: PlayerError) { throw e } catch (e: Exception) { last = e }
+        }
+        val e = last!!
+        if (seedChosen && setup.mapFile == null && setup.mapParameters.name.isEmpty())
+            throw PlayerError("Unciv couldn't make a playable map with seed ${setup.mapParameters.seed} (${e.message}). Pick another seed, or `/civ setup seed:random`.")
+        throw e
     }
 
     fun civOf(game: GameInfo, seat: Seat): Civilization = game.getCivilization(seat.civId)
