@@ -49,8 +49,8 @@ class PlayerError(msg: String) : Exception(msg)
 /** All game rules interaction. Every function here must run on the engine thread. */
 object GameOps {
 
-    val MAP_SIZES = listOf("Tiny", "Small", "Medium", "Large")
-    val MAP_TYPES = listOf("Continent and Islands", "Pangaea", "Two Continents", "Archipelago", "Inner Sea", "Lakes", "Small Continents", "Fractal")
+    val MAP_SIZES = listOf("Tiny", "Small", "Medium", "Large", "Huge")
+    val MAP_TYPES = listOf("Continent and Islands", "Pangaea", "Two Continents", "Archipelago", "Inner Sea", "Lakes", "Small Continents", "Fractal", "Perlin", "Three Continents", "Four Corners", "Spiral", "Boreal")
     val DIFFICULTIES = listOf("Settler", "Chieftain", "Warlord", "Prince", "King", "Emperor", "Immortal", "Deity")
     val SPEEDS = listOf("Quick", "Standard", "Epic", "Marathon")
     val ERAS = listOf("Ancient era", "Classical era", "Medieval era", "Renaissance era", "Industrial era", "Modern era", "Atomic era", "Information era")
@@ -95,7 +95,7 @@ object GameOps {
             type = s.mapType
             worldWrap = s.worldWrap
             mapSize = when (s.mapSize) {
-                "Tiny" -> MapSize.Tiny; "Medium" -> MapSize.Medium; "Large" -> MapSize.Large; else -> MapSize.Small
+                "Tiny" -> MapSize.Tiny; "Medium" -> MapSize.Medium; "Large" -> MapSize.Large; "Huge" -> MapSize.Huge; else -> MapSize.Small
             }
         }
         Extensions.all.forEach { it.applyToSetup(setup, meta) }

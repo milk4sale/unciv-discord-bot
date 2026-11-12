@@ -76,7 +76,7 @@ class GameMeta(
 class Session(val meta: GameMeta, var game: GameInfo?)
 
 /** Saves games as plain files under the data dir: <id>.meta.json and <id>.civ (Unciv save format). */
-class Store(private val dir: File) {
+class Store(val dir: File) {
     private val log = LoggerFactory.getLogger("Store")
     val sessions = ConcurrentHashMap<String, Session>()
 
