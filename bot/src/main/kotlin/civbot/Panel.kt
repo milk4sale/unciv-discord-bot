@@ -214,7 +214,7 @@ object Panel {
                 if (unit != null) {
                     val t = unit.getTile()
                     eb.addField("${GameOps.unitEmoji(unit)} ${unit.label()}",
-                        "❤️ ${unit.health}/100 · 👣 ${GameOps.movesText(unit)} · ${GameOps.unitStatus(unit)}" +
+                        "❤️ ${unit.health}/100 · 👣 ${GameOps.movesText(unit)} · ${UnitsPlus.statusText(unit, window)}" +
                             "\n⚔️ strength ${unit.baseUnit.strength}" + (if (unit.baseUnit.rangedStrength > 0) " · 🏹 ranged ${unit.baseUnit.rangedStrength} (range ${unit.getRange()})" else "") +
                             (if (unit.isEscorting()) " · 🤝 escorting" else "") +
                             "\n📍 ${window.code(t.position.x, t.position.y)} — ${GameOps.tileDescription(t, civ)}" +
@@ -223,7 +223,7 @@ object Panel {
                 } else eb.addField("No units", "Build some in the 🏙️ Cities tab.", false)
                 val unitChoices = units.map { u ->
                     val code = window.code(u.getTile().position.x, u.getTile().position.y) ?: "off-map"
-                    Choice("u:${u.id}", "${u.label()} — ${GameOps.unitStatus(u)}", "$code · ${GameOps.movesText(u)} moves · ❤️${u.health}", GameOps.unitEmoji(u))
+                    Choice("u:${u.id}", "${u.label()} — ${UnitsPlus.statusText(u, window)}", "$code · ${GameOps.movesText(u)} moves · ❤️${u.health}", GameOps.unitEmoji(u))
                 }
                 rows += ActionRow.of(select(id(gid, "selunit"), "Select a unit (${units.size})", unitChoices, unit?.let { "u:${it.id}" }))
                 val acts = if (unit != null) GameOps.unitChoices(unit) else emptyList()
