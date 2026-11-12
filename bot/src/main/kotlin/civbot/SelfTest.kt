@@ -300,7 +300,11 @@ object SelfTest {
                 // let both players end turns until it's this seat's turn again
                 repeat(2) { val sNow = seatNow(); ctl.apply(s, sNow, "end", listOf("force"), null) }
                 val later = eng { g -> GameOps.unitById(GameOps.civOf(g, seat), unitId)?.getTile()?.position }
+                // Unciv deliberately stops a moving unit when an enemy is within walking distance (MapUnit.doAction)
+                val enemyNear = eng { g -> GameOps.unitById(GameOps.civOf(g, seat), unitId)?.let { u ->
+                    u.movement.getDistanceToTiles().keys.any { t -> t.getUnits().any { e -> e.civ != u.civ && e.civ.isAtWarWith(u.civ) } } } == true }
                 if (later == null) println("standing orders: the unit was lost on the way (combat) — skipped")
+                else if (later == afterOrder && enemyNear) println("standing orders: stopped because an enemy is in sight (Unciv's rule) — skipped")
                 else if (afterOrder != null && later != afterOrder) { hit("standing orders: multi-turn Go to keeps moving"); println("standing orders: $from -> $afterOrder -> $later (target ${target.position})") }
                 else errors += "standing orders: unit didn't continue its Go to ($from -> $afterOrder -> $later, target ${target.position})"
             }
