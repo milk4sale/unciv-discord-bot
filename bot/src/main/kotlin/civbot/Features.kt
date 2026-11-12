@@ -323,7 +323,6 @@ object Features {
             .filter { (type == BeliefType.Any && it.type != BeliefType.Pantheon) || it.type == type }
             .filter { !beliefTaken(civ, it) && it.isAvailable(civ.state) }
             .map { Choice("b:${it.name}", it.name, GameOps.clean(it.uniques.joinToString("; ")).take(100), "✨") }
-            .take(25)
 
     fun pantheonAvailable(civ: Civilization) =
         civ.gameInfo.isReligionEnabled() && civ.religionManager.religionState == ReligionState.None && civ.religionManager.canFoundOrExpandPantheon()
@@ -351,7 +350,7 @@ object Features {
         val fav = civ.nation.favoredReligion
         return civ.gameInfo.ruleset.religions.filter { it !in used }
             .sortedByDescending { it == fav }
-            .map { Choice("r:$it", it, if (it == fav) "Your people's favourite" else "", "⛪") }.take(25)
+            .map { Choice("r:$it", it, if (it == fav) "Your people's favourite" else "", "⛪") }
     }
 
     fun completeReligion(civ: Civilization, name: String?, beliefs: List<String>): String {
@@ -372,7 +371,7 @@ object Features {
 
     fun greatPersonChoices(civ: Civilization): List<Choice> =
         if (civ.greatPeople.freeGreatPeople <= 0) emptyList()
-        else civ.greatPeople.getFreeGreatPersonOptions().map { Choice("gp:${it.name}", it.name, "Free Great Person", "🌟") }.take(25)
+        else civ.greatPeople.getFreeGreatPersonOptions().map { Choice("gp:${it.name}", it.name, "Free Great Person", "🌟") }
 
     fun chooseGreatPerson(civ: Civilization, name: String): String {
         civ.greatPeople.chooseFreeGreatPerson(name) ?: throw PlayerError("Couldn't place $name — do you have a city with room?")
