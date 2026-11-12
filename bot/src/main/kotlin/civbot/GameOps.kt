@@ -701,8 +701,9 @@ object GameOps {
         if (noProd.isNotEmpty()) w += "Pick **production** in ${noProd.joinToString { it.name }}"
         val idle = civ.units.getCivUnits().count { it.due && it.isIdle() && it.hasMovement() }
         if (idle > 0) w += "**$idle** unit(s) still have orders to give"
-        w += UnitsPlus.extraTurnWarnings(civ)
-        StatecraftPlus.inboxWarning(civ, w)?.let { w += it } // skips itself if an Inbox line is already there
+        // The detailed Inbox line (counts events) first; UnitsPlus's simpler Inbox line only if that one isn't there
+        StatecraftPlus.inboxWarning(civ, w)?.let { w += it }
+        w += UnitsPlus.extraTurnWarnings(civ).filter { line -> !("Inbox" in line && w.any { "Inbox" in it }) }
         return w
     }
 
@@ -802,6 +803,10 @@ object GameOps {
     /** Notifications the civ received since its turn started, cleaned for Discord. */
     fun turnNotifications(civ: Civilization, max: Int = 10): List<String> =
         civ.notifications.takeLast(max).map { "• " + clean(it.text) }
+
+    /** May everyone (public board, spectators) see every civ's score? Same settings as Unciv's Rankings page. */
+    fun publicStatsVisible(game: GameInfo): Boolean = game.victoryData != null ||
+        (game.gameParameters.showCivilizationStats == true && game.gameParameters.showRankings && !game.gameParameters.hideOtherCivilizationStats)
 
     fun scoreboard(game: GameInfo): List<Pair<Civilization, Int>> =
         game.civilizations.filter { it.isMajorCiv && !it.isSpectator }

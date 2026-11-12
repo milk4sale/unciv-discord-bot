@@ -441,11 +441,13 @@ class Bot(override val store: Store, override val ctl: Controller) : ListenerAda
                 else "▶️ Now playing: ${curSeat?.let { "<@${it.userId}>" } ?: cur.civName} (**${cur.civName}**)\n" +
                     "Press **Open my panel** to see your empire — only you can see your panel."
             )
-            val scores = GameOps.scoreboard(game).joinToString("\n") { (civ, score) ->
+            val public = GameOps.publicStatsVisible(game)
+            val scores = GameOps.scoreboard(game).let { list -> if (public) list else list.sortedBy { it.first.civName } }.joinToString("\n") { (civ, score) ->
                 val who = meta.seatOfCiv(civ.civID)?.let { "<@${it.userId}>" } ?: "AI"
-                "${if (!civ.isAlive()) "☠️" else if (civ == cur) "▶️" else "•"} **${civ.civName}** ($who) — $score pts · ${civ.cities.size} cities"
+                "${if (!civ.isAlive()) "☠️" else if (civ == cur) "▶️" else "•"} **${civ.civName}** ($who)" +
+                    (if (public) " — $score pts · ${civ.cities.size} cities" else "")
             }
-            eb.addField("Scoreboard", scores.take(1024), false)
+            eb.addField(if (public) "Scoreboard" else "Players (scores hidden by game settings)", scores.take(1024), false)
             if (meta.events.isNotEmpty()) eb.addField("Recent events", meta.events.takeLast(8).joinToString("\n").take(1024), false)
             var file: FileUpload? = null
             if (!meta.settings.fogOfWar || meta.status == Status.ENDED) {
@@ -702,8 +704,9 @@ class Bot(override val store: Store, override val ctl: Controller) : ListenerAda
         val showMap = !s.meta.settings.fogOfWar || s.meta.status == Status.ENDED
         val (embed, png) = Engine.withGame(game) {
             val eb = EmbedBuilder().setColor(Color(149, 165, 166)).setTitle("👁️ Spectating ${s.meta.name} — Turn ${game.turns + 1}")
+            val public = GameOps.publicStatsVisible(game)
             eb.setDescription(GameOps.scoreboard(game).joinToString("\n") { (c, sc) ->
-                "**${c.civName}** — $sc pts · ${c.cities.size} cities · ${c.units.getCivUnitsSize()} units" + (if (!c.isAlive()) " ☠️" else "")
+                "**${c.civName}**" + (if (public) " — $sc pts · ${c.cities.size} cities · ${c.units.getCivUnitsSize()} units" else "") + (if (!c.isAlive()) " ☠️" else "")
             } + if (showMap) "" else "\n\n🌫️ Fog of war is on, so the map stays hidden until the game ends.")
             if (showMap) eb.setImage("attachment://world.png")
             eb.build() to (if (showMap) MapRenderer.renderWhole(game.tileMap.values, null, 1) else null)
@@ -735,7 +738,7 @@ class Bot(override val store: Store, override val ctl: Controller) : ListenerAda
         🏰 **City-states** — gifts, protection, tribute, quests
         📊 **Overview** — empire stats, happiness, resources, rankings, Great People
         🗺️ **Map** — scroll around, 🔍 inspect any tile, 🌍 world map
-        Also: 👥 **Citizens** (work tiles, specialists) · 🎖️ **Military** (nukes, air units) · 🕵️ **Espionage** · 🗳️ **World Congress** · 📨 **Inbox** (AI demands & offers) · ✨ **Beliefs** · 🏆 **Victory** progress · 📖 **Civilopedia**
+        Also: 🏗️ **Production** (queue editing, buying, details) · 👥 **Citizens** · 🏙️ **Cities overview** · 🏛️ **Wonders** · 🎖️ **Military** (nukes, air units) · 🧭 **Relations** (opinions, deals, demands) · 🕵️ **Espionage** · 🗳️ **World Congress** · 📨 **Inbox** (AI demands, offers, events) · 📰 **News** · ✨ **Beliefs** · ⛪ **Found religion** · 🔬 **Research queue** · 📊 **Stats** & charts · 🎞️ **Replay** · 🏆 **Victory** · 📖 **Civilopedia**
         ↩️ **Undo** is the first entry in the Unit/City action menus.
 
         **🤖 Auto-pick** lets the AI fill in anything you skipped. **✅ End turn** passes play on; AIs move automatically.

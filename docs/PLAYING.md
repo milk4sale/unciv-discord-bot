@@ -188,6 +188,16 @@ policy tree, and 📜 continues one you've already opened.
 Appears only when there's something to pick. Some civilizations can **expand their pantheon** with
 a second belief, and some bonuses grant **extra beliefs for your religion**. Choose them here.
 
+### Unit extras
+
+- **🔄 Swap** places with one of your units next to you. Go to onto your own unit swaps too.
+- **👥 Move a group…** sends several nearby units to one tile.
+- A moving unit shows where it's heading, on the map and in its status.
+- **⭐ Promote toward …** takes several promotion steps at once. **🎖️ Save promotions as default** applies them to future units of that type built in this city.
+- **⬆️ Upgrade all** upgrades every unit of that type you can afford.
+- **🤖 Automate military / civilians / all once** lets the AI move those units for this turn only.
+- **Disband** shows the gold you'd get and asks to confirm.
+
 ### 🤝 Diplomacy
 
 - Lists every civilization you've met, with your relationship and their score.
@@ -287,6 +297,17 @@ your server, even outside a game.
 - **🔍 Inspect…** opens a box: type a tile code to see its terrain, yields, resource,
   improvement, owner and any units on it.
 - **🌍 World** shows everything you've explored on one image; **🔎 Zoomed** goes back.
+
+### More tabs
+
+- **🏗️ Production:** the build queue for a city. Pick an entry, then move it up, down, to the top or to the end, remove it, or buy it with gold, faith or another allowed currency. Add items to the end or the top, in this city or all cities, and disable items you never want. **📈 Details** shows turns to the next border tile, We Love the King Day, resistance, local resources, great-person points, religion pressure, a breakdown of any stat, and why something can't be built.
+- **🏙️ Cities overview / 🏛️ Wonders:** all your cities side by side (sortable), and every wonder in the game: who built it, and which of your cities could.
+- **🧭 Relations:** why the selected civ likes or dislikes you, promises on both sides, active deals with turns left, and who's at war or allied with whom. **📢 Make a demand** asks an AI to stop settling near you, stop spying, and so on. It answers on its turn.
+- **📊 Stats:** per-source breakdowns of gold, science, culture, faith and happiness, the score breakdown, unit supply, resources by origin, every religion, global politics, demographics, 📈 **charts** of any stat over time, and the full notification log.
+- **🎞️ Replay:** step through the world map turn by turn (from turn 5).
+- **📰 News:** every notification. Picking one jumps to the unit, city or tile it mentions.
+- **🔬 Research queue:** shown when several techs are queued. **➕ Add goal to queue** on the Research tab lines up more goals.
+- **⛪ Found religion:** while founding or enhancing, name your religion (✏️ custom names too) and pick any number of beliefs.
 
 ## ↩️ Undo
 

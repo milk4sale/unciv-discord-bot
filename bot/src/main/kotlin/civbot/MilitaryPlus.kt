@@ -427,7 +427,8 @@ object MilitaryPlus : Extension {
         }
         say("extra cities ${setup.extraCities.size}, sweep target ${setup.sweepTarget?.position}, nuke target ${setup.nukeTarget?.position}")
         val w = MapWindow(setup.capital.position)
-        fun code(tile: Tile) = w.code(tile.position.x, tile.position.y)!!
+        // Some random maps put a test tile outside the capital's view; fall back to that tile's own view
+        fun code(tile: Tile) = w.code(tile.position.x, tile.position.y) ?: MapWindow(tile.position).code(tile.position.x, tile.position.y)!!
 
         // ---- Military tab
         t.act(a, "tab", emptyList(), TAB, null)

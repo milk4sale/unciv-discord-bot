@@ -9,7 +9,7 @@ import java.io.File
  * tab and feature, renders every tab to PNG and checks save/load. Prints a feature checklist.
  */
 object SelfTest {
-    private const val TURNS = 6 // human turns (two players -> ~15 game turns)
+    private const val TURNS = 30 // human turns (two players -> ~15 game turns)
     private val hits = LinkedHashMap<String, Int>()
     private val errors = ArrayList<String>()
     private fun hit(name: String) { hits[name] = (hits[name] ?: 0) + 1 }
@@ -24,6 +24,10 @@ object SelfTest {
         meta.settings.aiCivs = 3
         meta.settings.mapSize = "Small"
         meta.settings.cityStates = 6
+        // Fixed map seed so the test (and CI) plays the same world every run. SELFTEST_SEED=random for a random map.
+        val seed = System.getenv("SELFTEST_SEED") ?: "424242"
+        if (seed != "random") meta.settings.extra[SetupPlus.K_SEED] = seed
+        println("Self-test map seed: $seed")
         val game0 = Engine.run { GameOps.startGame(meta) }
         val s = Session(meta, game0)
         meta.status = Status.RUNNING
@@ -242,7 +246,9 @@ object SelfTest {
                 }
                 if (dest != null) {
                     act(alice, "roadto", value = dest, feature = "connect road to a tile")
-                    check(eng { worker.isAutomatingRoadConnection() || worker.getTile().roadStatus != com.unciv.logic.map.tile.RoadStatus.None }, "worker is building the road")
+                    // Only when the road was accepted (a target can be unreachable on some maps — then the bot refuses, correctly)
+                    if (pst.flash.lastOrNull()?.startsWith("🛣️") == true)
+                        check(eng { worker.isAutomatingRoadConnection() || worker.getTile().roadStatus != com.unciv.logic.map.tile.RoadStatus.None }, "worker is building the road")
                 }
                 // clean up so later tests see a normal-sized army
                 eng { _ -> army.forEach { u -> if (u.civ.units.getCivUnits().contains(u)) u.destroy() } }

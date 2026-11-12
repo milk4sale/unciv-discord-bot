@@ -44,10 +44,13 @@ Most features beyond the basics live in **extension objects**, one file each, re
 
 | File | Features |
 |---|---|
-| `CityPlus.kt` | 👥 Citizens tab, sell building, rename city/unit, worker improvement queue, ↩️ undo |
+| `CityPlus.kt` | 👥 Citizens, 🏗️ Production (queue editing, buying, details), 🏙️ Cities overview and 🏛️ Wonders tabs, sell, rename, worker queue, ↩️ undo |
+| `UnitsPlus.kt` | swap, group move, destinations, promotion paths and defaults, disband confirm, upgrade all, AutoPlay once, 📰 News tab, end-turn checklist extras |
+| `DiplomacyPlus.kt` | war confirmation and peace lock, two-sided treaties, 🧭 Relations tab, player demands, custom deal amounts, city-state details, gifts and marriage |
+| `SetupPlus.kt` | `/civ setup` (all remaining game options), `/civ save export` / `import` |
 | `MilitaryPlus.kt` | 🎖️ Military tab, nukes with blast preview and confirm, air sweep / strike / rebase |
-| `StatecraftPlus.kt` | 🕵️ Espionage, 🗳️ World Congress and 📨 Inbox tabs, `/civ espionage` |
-| `InfoPlus.kt` | 🏆 Victory, 📖 Civilopedia and ✨ Beliefs tabs, `/civ wiki` |
+| `StatecraftPlus.kt` | 🕵️ Espionage, 🗳️ World Congress, 📨 Inbox (incl. random events), 🔬 Research queue and ⛪ Found religion tabs, policy branch progress, `/civ espionage` |
+| `InfoPlus.kt` (+ `InfoPlusStats.kt`) | 🏆 Victory, 📖 Civilopedia, ✨ Beliefs, 📊 Stats (breakdowns, demographics, charts…) and 🎞️ Replay tabs, ranking privacy, `/civ wiki` |
 | `ModsPlus.kt` | `/civ mod`, `/civ map`, `/civ lobby` (mods, base ruleset, custom maps, scenarios) |
 
 To add a feature area, create `XyzPlus.kt` with `object XyzPlus : Extension`, add it to
@@ -86,7 +89,8 @@ setup.sh / run.sh
 ./run.sh --selftest                                 # offline end-to-end test
 ```
 
-The self-test plays about 20 game turns with two scripted humans and three AIs through the
+The self-test uses a fixed map seed (`SELFTEST_SEED`, default 424242; `SELFTEST_SEED=random` for a random
+map) so every run and CI see the same world. It plays about 15 game turns with two scripted humans and three AIs through the
 real `Controller`, then runs a scenario that sets up hard-to-reach situations: workers, escorts,
 city-state gifts, pantheon, free Great Person, and deals, war and peace between two humans. It
 prints a feature checklist and `Errors: N`, and writes every panel tab to `selftest-out/*.png`

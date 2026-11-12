@@ -358,7 +358,7 @@ object StatecraftPlus : Extension {
 
         if (civ.mayVoteForDiplomaticVictory()) {
             val opts = voteCandidates(civ).map {
-                Choice("sp:v:${it.civID}", "Vote for ${it.civName}", "${it.calculateTotalScore().toInt()} pts · ${GameOps.relationText(civ, it)}".take(100), "🗳️")
+                Choice("sp:v:${it.civID}", "Vote for ${it.civName}", (InfoPlus.scoreSuffix(civ, it).removePrefix(" · ").let { s -> if (s.isEmpty()) "" else "$s · " } + GameOps.relationText(civ, it)).take(100), "🗳️")
             } + Choice("sp:v:-", "Abstain", "Don't vote for anyone", "🚫")
             t.rows += ActionRow.of(t.select("sp_vote", "Who should lead the world?", opts.take(25), enabled = t.myTurn))
         }

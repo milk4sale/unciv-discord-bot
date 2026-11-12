@@ -23,23 +23,29 @@ Discord, with nothing to install as a player.
 
 | Panel tab | Features |
 |---|---|
-| ⚔️ **Units** | move with arrow buttons or 🎯 *Go to* a tile code / city; found cities; build roads, farms, mines… and queue the next improvement; 🛣️ connect a road to any tile or city; fortify, sleep (also until healed), explore, automate; attack; promotions and upgrades; escort pairs; pillage; paradrop; gift units to city-states; rename; Great Person abilities; missionaries and prophets; **↩️ undo** |
-| 🏙️ **Cities** | production with an optional 📋 queue; buy with gold or faith; city bombard; citizen focus; buy tiles; sell buildings; rename; annex puppets; raze / stop razing; **↩️ undo** |
+| ⚔️ **Units** | move with arrow buttons or 🎯 *Go to* a tile code / city; found cities; build roads, farms, mines… and queue the next improvement; 🛣️ connect a road to any tile or city; fortify, sleep (also until healed), explore, automate; attack; promotions and upgrades; escort pairs; pillage; paradrop; gift units to city-states; rename; Great Person abilities; missionaries and prophets; 🔄 swap places; 👥 move a group; promote along a path and save default promotions; ⬆️ upgrade all of a type; 🤖 automate units for one turn; destinations drawn on the map; **↩️ undo** |
+| 🏙️ **Cities** | production with an optional 📋 queue; buy with gold or faith; city bombard; citizen focus; buy tiles (any tile or a whole ring); sell buildings; rename; annex puppets; raze / stop razing; **↩️ undo** |
+| 🏗️ **Production** | full queue editing (move up/down/top/end, add to top, remove, all cities at once); buy anything with any allowed currency at its queue position; every production conversion; disable items; 📈 city details (border growth, We Love the King Day, religion pressure, great-person points, stat explanations, "why can't I build this?") |
+| 🏙️ **Cities overview** · 🏛️ **Wonders** | every city's stats in one sortable list · every wonder, built by whom, and where you can build it |
 | 👥 **Citizens** | choose exactly which tiles each city works, lock tiles, assign specialists, avoid growth |
 | 🎖️ **Military** | army overview, wars and enemies in range, ☢️ nukes with a blast preview and a confirm step, ✈️ air sweeps, air strikes, rebasing to cities or carriers |
 | 🔬 **Research** | pick the next tech (each option lists what it unlocks) or set a far-off goal and the whole path is queued |
 | 📜 **Policies** | adopt social policies when your culture allows |
 | 🙏 **Religion** | found a pantheon, name your religion, choose founder / follower / enhancer beliefs |
-| 🤝 **Diplomacy** | a deal builder (gold, gold per turn, luxuries, strategic resources, techs, **cities**, embassies, open borders, research agreements, defensive pacts, **asking a third civ to join a war**, peace), war, friendship, denouncing |
+| 🤝 **Diplomacy** | a deal builder (gold, gold per turn, luxuries, strategic resources, techs, **cities**, embassies, open borders, research agreements, defensive pacts, **asking a third civ to join a war**, peace), war (with a consequences check and the peace lock), friendship, denouncing; custom gold amounts |
+| 🧭 **Relations** | why each AI likes or dislikes you, promises, active deals with turns left, world politics, 📢 make demands |
 | 🏰 **City-states** | gold gifts, pledge protection, demand tribute, see influence, allies and quests |
 | 🕵️ **Espionage** | move spies to steal technology, rig city-state elections, stage coups, or guard your own cities |
 | 🗳️ **World Congress** | vote for world leader, see the tally and what's needed to win |
 | 📨 **Inbox** | answer AI demands, friendship offers and AI trade offers yourself; news |
 | ✨ **Beliefs** | expand your pantheon, add free beliefs to your religion |
-| 📊 **Overview** | empire stats, happiness breakdown, golden ages, resources, rankings, Great People, recent history |
+| 📊 **Overview** · **Stats** | empire stats; per-source breakdowns of every stat; score breakdown; unit supply; gold→science; resources by origin; religions; global politics; demographics; 📈 history charts; full notification log |
+| 🎞️ **Replay** | step through the world map turn by turn |
+| 📰 **News** | every notification, and picking one jumps to the unit, city or tile it's about |
 | 🏆 **Victory** | progress towards every victory type (spaceship parts, policy trees, capitals, votes, time), score ranking |
 | 📖 **Civilopedia** | every unit, building, wonder, tech, policy, belief, resource, terrain and nation, with search and pixel art |
 | 🗺️ **Map** | scroll anywhere, 🔍 inspect any tile, 🌍 view the whole explored world |
+| 🔬 **Research queue** · ⛪ **Found religion** | queue several research goals · name your religion and pick any number of beliefs |
 
 Plus:
 - a lobby with full game settings, including **Unciv mods from GitHub**, **custom maps** made in
@@ -48,6 +54,7 @@ Plus:
 - deals, peace and friendship offers between human players, answered with Accept/Decline buttons
 - captured-city decisions, spectating and host tools
 - `/civ wiki` lookups for anyone, even outside a game
+- random events with choices (from mods and scenarios) answered in your 📨 Inbox
 
 An optional **Discord Activity** add-on shows the same panel as an embedded web app.
 
@@ -92,6 +99,8 @@ walks you through it with every click.
 | `/civ leave` | hand your civilization to the AI |
 | `/civ kick @player` · `/civ host @player` · `/civ end` | host tools |
 | `/civ lobby …` · `/civ espionage` | host: pick mods, base rules, custom map, scenario; turn spies on |
+| `/civ setup …` | host: every other Unciv game option (map shape, resources, sea level, max turns, One City Challenge, nukes, AI nations, more AIs…) |
+| `/civ save export` · `/civ save import` | download a game to keep playing in desktop Unciv · start a lobby from an Unciv save |
 | `/civ mod …` · `/civ map …` | list, install or remove Unciv mods (from GitHub) and custom maps (Manage Server) |
 | `/civ wiki query:…` | Civilopedia lookup for anyone |
 | `/civ help` | in-Discord quick guide |
