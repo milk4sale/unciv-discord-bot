@@ -39,11 +39,11 @@ Discord, with nothing to install as a player.
 | 🗳️ **World Congress** | vote for world leader, see the tally and what's needed to win |
 | 📨 **Inbox** | answer AI demands, friendship offers and AI trade offers yourself; news |
 | ✨ **Beliefs** | expand your pantheon, add free beliefs to your religion |
-| 📊 **Overview** · **Stats** | empire stats; per-source breakdowns of every stat; score breakdown; unit supply; gold→science; resources by origin; religions; global politics; demographics; 📈 history charts; full notification log |
+| 📊 **Overview** · **Stats** | empire stats; per-source breakdowns of every stat; score breakdown; unhappiness effects; unit supply; gold→science; resources by origin; religions; global politics with a relations diagram; demographics; 📈 history charts; full notification log |
 | 🎞️ **Replay** | step through the world map turn by turn |
 | 📰 **News** | every notification, and picking one jumps to the unit, city or tile it's about |
-| 🏆 **Victory** | progress towards every victory type (spaceship parts, policy trees, capitals, votes, time), score ranking |
-| 📖 **Civilopedia** | every unit, building, wonder, tech, policy, belief, resource, terrain and nation, with search and pixel art |
+| 🏆 **Victory** | progress towards every victory type (spaceship parts, policy trees, capitals, votes, time), every civ ranked by any stat |
+| 📖 **Civilopedia** | every unit, building, wonder, tech, policy, belief, resource, terrain and nation (plus Unciv's tutorials, global uniques and religion overviews), with search, 🔗 related-entry links and pixel art |
 | 🗺️ **Map** | scroll anywhere, 🔍 inspect any tile, 🌍 view the whole explored world |
 | 🔬 **Research queue** · ⛪ **Found religion** | queue several research goals · name your religion and pick any number of beliefs |
 

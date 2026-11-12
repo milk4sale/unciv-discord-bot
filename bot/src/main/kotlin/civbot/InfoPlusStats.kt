@@ -49,7 +49,8 @@ object InfoStats {
         CHARTS("chart", "Charts", "📈", "A ranking stat of every civ over the turns"),
     }
 
-    class StatsState(var view: String = View.BREAKDOWN.key, var page: Int = 0, var ranking: String = RankingType.Score.name)
+    class StatsState(var view: String = View.BREAKDOWN.key, var page: Int = 0, var ranking: String = RankingType.Score.name,
+                     /** politics diagram: include city-states (GlobalPoliticsOverviewTable.includeCityStates) */ var diagramCs: Boolean = false)
     class ReplayState(var turn: Int? = null)
 
     fun stats(st: PanelState) = st.ext.getOrPut("ip.stats") { StatsState() } as StatsState
@@ -125,8 +126,12 @@ object InfoStats {
             t.button("ip_spg", "Page", "◀️", 2, s.page > 0, "-1"),
             t.button("ip_spg", "${s.page + 1}/${pages.size}", "▶️", 2, s.page < pages.size - 1, "1"),
         )
-        if (view == View.CHARTS && chartsShown(civ)) t.file = FileUpload.fromData(chartPng(civ, rankingOf(s, civ)), "map.png")
-        else t.worldMap()
+        if (view == View.POLITICS) t.endRow += t.button("ip_pcs", if (s.diagramCs) "Hide city-states" else "Show city-states", "🏰", if (s.diagramCs) 1 else 2, true)
+        when {
+            view == View.CHARTS && chartsShown(civ) -> t.file = FileUpload.fromData(chartPng(civ, rankingOf(s, civ)), "map.png")
+            view == View.POLITICS -> t.file = FileUpload.fromData(politicsDiagramPng(civ, s.diagramCs), "map.png")
+            else -> t.worldMap()
+        }
     }
 
     class Field(val name: String, val value: String, val inline: Boolean = false)
@@ -181,6 +186,10 @@ object InfoStats {
         val happy = civ.stats.getHappinessBreakdown()
         out += Field("😊 Happiness ${signed(happy.values.sum())}", InfoPlus.fitLines(happy.entries.mapNotNull { (k, v) ->
             v.roundToInt().takeIf { it != 0 }?.let { "${signed(it)} ${tx(k)}" } }.ifEmpty { listOf("—") }, 1000), true)
+        // StatsOverviewTab.UnhappinessTable: effects tied to your happiness level (only when the ruleset has such uniques)
+        val unhappy = unhappinessUniques(civ)
+        if (unhappy.isNotEmpty()) out += Field("😟 Unhappiness effects", InfoPlus.fitLines(unhappy.map { (u, active) ->
+            (if (active) "▶️ **now:** " else "• ") + tx(u.getDisplayText()) }, 1000), false)
 
         // Score
         val score = civ.calculateScoreBreakdown()
@@ -208,6 +217,26 @@ object InfoStats {
         } + gp.greatGeneralPointsCounter.entries.map { (unit, pts) -> "$unit: $pts/${gp.pointsForNextGreatGeneralCounter[unit]}" }
         out += Field("🌟 Great person points", InfoPlus.fitLines(gpLines.ifEmpty { listOf("No great person points yet.") }, 1000), false)
         return out
+    }
+
+    private val happinessConditionals = setOf(UniqueType.ConditionalWhenAboveAmountStatResource,
+        UniqueType.ConditionalWhenBetweenStatResource, UniqueType.ConditionalWhenBelowAmountStatResource)
+
+    /** Uniques affecting [civ] that depend on its happiness ("<when below [-10] [Happiness]>"), with whether they apply now. */
+    fun unhappinessUniques(civ: Civilization): List<Pair<com.unciv.models.ruleset.unique.Unique, Boolean>> {
+        val rs = civ.gameInfo.ruleset
+        val sources = sequence {
+            yieldAll(civ.gameInfo.getGlobalUniques().uniqueObjects)
+            yieldAll(civ.nation.uniqueObjects)
+            yieldAll(civ.getEra().uniqueObjects)
+            for (p in civ.policies.getAdoptedPolicies()) rs.policies[p]?.let { yieldAll(it.uniqueObjects) }
+            for (tn in civ.tech.techsResearched) rs.technologies[tn]?.let { yieldAll(it.uniqueObjects) }
+            civ.religionManager.religion?.let { r -> for (b in r.getAllBeliefsOrdered()) if (!b.type.isFounder || r.foundingCiv == civ) yieldAll(b.uniqueObjects) }
+            for (city in civ.cities) for (b in city.cityConstructions.getBuiltBuildings()) yieldAll(b.uniqueObjects)
+        }
+        return sources.filter { u -> !u.isHiddenToUsers() && u.modifiers.any { it.type in happinessConditionals && it.params.lastOrNull() == "Happiness" } }
+            .distinctBy { it.text }.sortedBy { it.type?.name ?: it.text }
+            .map { it to runCatching { it.conditionalsApply(civ.state) }.getOrDefault(false) }.toList()
     }
 
     // ---------------------------------------------------------------- resources (ResourcesOverviewTab)
@@ -355,6 +384,129 @@ object InfoStats {
         return out
     }
 
+    /** GlobalPoliticsDiagramGroup.Relation: the line colour/label of one civ-civ relation, with its z-order. */
+    enum class Relation(val label: String, val color: com.badlogic.gdx.graphics.Color, val z: Int) {
+        War("War", com.badlogic.gdx.graphics.Color.RED, 100),
+        Unforgivable("Unforgivable", RelationshipLevel.Unforgivable.color, 7),
+        Enemy("Enemy", RelationshipLevel.Enemy.color, 5),
+        Afraid("Afraid", RelationshipLevel.Afraid.color, 4),
+        Competitor("Competitor", RelationshipLevel.Competitor.color, 2),
+        Neutral("Neutral", RelationshipLevel.Neutral.color, 0),
+        Favorable("Favorable", RelationshipLevel.Favorable.color, 1),
+        Friend("Friend", RelationshipLevel.Friend.color, 3),
+        Ally("Ally", RelationshipLevel.Ally.color, 6),
+        DefensivePact("Defensive Pact", com.badlogic.gdx.graphics.Color.PURPLE, 99),
+    }
+
+    /** DiplomacyManager.getRelation of the diagram (private there). */
+    fun relationOf(a: Civilization, b: Civilization): Relation? {
+        val dm = a.diplomacy[b.civID] ?: return null
+        return when {
+            dm.diplomaticStatus == com.unciv.logic.civilization.diplomacy.DiplomaticStatus.War -> Relation.War
+            dm.diplomaticStatus == com.unciv.logic.civilization.diplomacy.DiplomaticStatus.DefensivePact && !(a.isCityState || b.isCityState) -> Relation.DefensivePact
+            a.isHuman() && b.isHuman() && dm.hasModifier(com.unciv.logic.civilization.diplomacy.DiplomaticModifiers.DeclarationOfFriendship) -> Relation.Friend
+            (a.isCityState && a.allyCiv == b) || (b.isCityState && b.allyCiv == a) -> Relation.Ally
+            else -> Relation.valueOf(dm.relationshipLevel().name)
+        }
+    }
+
+    /** GlobalPoliticsOverviewTable.updateDiagram: you + the civs you know (alive), optionally with city-states. */
+    fun diagramCivs(viewer: Civilization, includeCs: Boolean): List<Civilization> =
+        (if (viewer.isSpectator) emptyList() else listOf(viewer)) + viewer.getKnownCivs()
+            .filter { it != viewer && !it.isBarbarian && !it.isSpectator && !it.isDefeated() && (includeCs || !it.isCityState) }
+            .sortedWith(compareByDescending<Civilization> { it.isMajorCiv }.thenBy { it.civName }).toList()
+
+    /** Every line of the diagram: (from, to, relation), lowest z first (war is drawn on top). */
+    fun diagramLines(civs: List<Civilization>): List<Triple<Civilization, Civilization, Relation>> {
+        val out = ArrayList<Triple<Civilization, Civilization, Relation>>()
+        for ((i, c) in civs.withIndex()) {
+            if (c.isDefeated()) continue
+            for (j in 0 until i) {
+                val o = civs[j]
+                if (o.isDefeated()) continue
+                relationOf(c, o)?.let { out += Triple(c, o, it) }
+            }
+        }
+        return out.sortedBy { it.third.z }
+    }
+
+    /** The "ball of yarn" (GlobalPoliticsDiagramGroup) as a PNG: civs on a circle, one coloured line per relation, legend. */
+    fun politicsDiagramPng(viewer: Civilization, includeCs: Boolean): ByteArray {
+        val civs = diagramCivs(viewer, includeCs)
+        val lines = diagramLines(civs)
+        val w = 1100; val h = 720
+        val legendW = 230
+        val areaW = w - legendW
+        val cx = areaW / 2.0 + 10; val cy = h / 2.0 + 14
+        // room for the names left and right of the circle
+        val radius = minOf(h / 2.0 - 62, areaW / 2.0 - 150)
+        val img = BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB)
+        val g = img.createGraphics()
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+        g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
+        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC)
+        g.color = Color(30, 31, 36); g.fillRect(0, 0, w, h)
+        g.color = Color(240, 240, 245); g.font = Font(Font.SANS_SERIF, Font.BOLD, 22)
+        g.drawString("Global politics", 20, 34)
+        g.font = Font(Font.SANS_SERIF, Font.PLAIN, 14); g.color = Color(170, 170, 180)
+        g.drawString(if (includeCs) "with city-states" else "major civilizations", 20, 54)
+        // positions: HexMath.getVectorForAngle (sin, cos) — the first civ (you) at the top
+        val pos = civs.withIndex().associate { (i, c) ->
+            val a = 2 * Math.PI * i / civs.size
+            c to Pair(cx + kotlin.math.sin(a) * radius, cy - kotlin.math.cos(a) * radius)
+        }
+        val many = civs.size > 16
+        for ((a, b, rel) in lines) {
+            val (x1, y1) = pos[a]!!; val (x2, y2) = pos[b]!!
+            g.color = gdx(rel.color)
+            g.stroke = BasicStroke(if (rel == Relation.War || rel == Relation.DefensivePact || rel == Relation.Ally) 3.5f else 2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
+            g.draw(java.awt.geom.Line2D.Double(x1, y1, x2, y2))
+        }
+        val r = if (many) 16 else 24
+        g.font = Font(Font.SANS_SERIF, Font.BOLD, if (many) 11 else 13)
+        val fm = g.fontMetrics
+        for (c in civs) {
+            val (x, y) = pos[c]!!
+            val outer = gdx(c.nation.getOuterColor()); val inner = gdx(c.nation.getInnerColor())
+            g.color = outer; g.fillOval((x - r).toInt(), (y - r).toInt(), 2 * r, 2 * r)
+            g.color = if (c == viewer) Color(255, 215, 80) else inner; g.stroke = BasicStroke(if (c == viewer) 3.5f else 2f)
+            g.drawOval((x - r).toInt(), (y - r).toInt(), 2 * r, 2 * r)
+            InfoPlus.nationIcon(c.nation)?.let { ic ->
+                val s = (r * 1.3).toInt()
+                g.drawImage(InfoPlus.tinted(ic, inner), (x - s / 2).toInt(), (y - s / 2).toInt(), s, s, null)
+            }
+            val name = c.civName + if (c == viewer) " (you)" else ""
+            // label outside the circle
+            val dx = x - cx; val dy = y - cy
+            val lx0 = if (abs(dx) < 10) x - fm.stringWidth(name) / 2.0 else if (dx > 0) x + r + 4 else x - r - 4 - fm.stringWidth(name)
+            val lx = lx0.coerceIn(6.0, areaW - 6.0 - fm.stringWidth(name))
+            val ly = if (abs(dx) < 10) (if (dy < 0) y - r - 6 else y + r + fm.ascent + 2) else y + fm.ascent / 2.0 - 1
+            g.color = Color(0, 0, 0, 160); g.fillRoundRect(lx.toInt() - 3, (ly - fm.ascent).toInt() - 1, fm.stringWidth(name) + 6, fm.height + 1, 6, 6)
+            g.color = Color(235, 235, 240); g.drawString(name, lx.toInt(), ly.toInt())
+        }
+        if (civs.size < 2) {
+            g.font = Font(Font.SANS_SERIF, Font.PLAIN, 18); g.color = Color(200, 200, 210)
+            g.drawString("You haven't met anyone yet.", (cx - 110).toInt(), (cy + 60).toInt())
+        }
+        // legend (DiagramLegendPopup), with how many lines of each kind
+        val counts = lines.groupingBy { it.third }.eachCount()
+        var ly = 90
+        val lx = w - legendW + 10
+        g.font = Font(Font.SANS_SERIF, Font.BOLD, 16); g.color = Color(240, 240, 245)
+        g.drawString("Diagram line colors", lx, ly); ly += 30
+        g.font = Font(Font.SANS_SERIF, Font.PLAIN, 15)
+        for (rel in listOf(Relation.War) + Relation.entries.filter { it != Relation.War && it != Relation.DefensivePact } + Relation.DefensivePact) {
+            val n = counts[rel] ?: 0
+            g.color = gdx(rel.color); g.stroke = BasicStroke(4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
+            g.drawLine(lx, ly - 5, lx + 50, ly - 5)
+            g.color = if (n > 0) Color(230, 230, 236) else Color(120, 120, 128)
+            g.drawString(rel.label + if (n > 0) "  ($n)" else "", lx + 62, ly)
+            ly += 28
+        }
+        g.dispose()
+        return ByteArrayOutputStream().also { ImageIO.write(img, "png", it) }.toByteArray()
+    }
+
     // ---------------------------------------------------------------- notification log (NotificationsOverviewTable)
 
     private fun categoryEmoji(c: Notification.NotificationCategory) = when (c) {
@@ -425,7 +577,7 @@ object InfoStats {
         return out
     }
 
-    private fun rankEmoji(rt: RankingType) = when (rt) {
+    fun rankEmoji(rt: RankingType) = when (rt) {
         RankingType.Score -> "🏅"; RankingType.Population -> "👥"; RankingType.Growth -> "🍞"; RankingType.Production -> "⚙️"
         RankingType.Gold -> "💰"; RankingType.Territory -> "⬡"; RankingType.Force -> "🛡️"; RankingType.Happiness -> "😊"
         RankingType.Technologies -> "🔬"; RankingType.Culture -> "🎭"; RankingType.TilesExplored -> "🧭"
@@ -666,6 +818,7 @@ object InfoStats {
         when (verb) {
             "ip_sv" -> { val s = stats(ctx.st); s.view = v ?: s.view; s.page = 0 }
             "ip_spg" -> stats(ctx.st).page += ctx.args.firstOrNull()?.toIntOrNull() ?: 1
+            "ip_pcs" -> { val s = stats(ctx.st); s.diagramCs = !s.diagramCs }
             "ip_rank" -> {
                 val rt = rankingTypes(civ).firstOrNull { it.name == v } ?: throw PlayerError("Unknown ranking.")
                 stats(ctx.st).ranking = rt.name
@@ -771,6 +924,51 @@ fun InfoStats.selfTest(t: SelfTestCtx) {
     t.act(a, "ip_sv", emptyList(), "ip:res", "resources by origin")
     t.act(a, "ip_sv", emptyList(), "ip:rel", "religion overview")
     t.act(a, "ip_sv", emptyList(), "ip:pol", "global politics")
+
+    // ---- 😟 Unhappiness uniques (StatsOverviewTab.UnhappinessTable) — the base rulesets' GlobalUniques have them
+    val unhappy = t.eng { g -> unhappinessUniques(GameOps.civOf(g, a)).map { (u, on) -> (if (on) "▶" else "·") + InfoPlus.tx(u.getDisplayText()) } }
+    println("  [stats] unhappiness uniques: $unhappy")
+    check(unhappy.isNotEmpty(), "no unhappiness uniques found")
+    check(t.eng { g -> breakdownFields(GameOps.civOf(g, a)).any { it.name.contains("Unhappiness") } }, "no Unhappiness field")
+    // active one: drive happiness down by cheating a global unique ("when below…" applies)
+    val activeNow = t.eng { g -> val c = GameOps.civOf(g, a); val saved = c.stats.happiness
+        c.stats.happiness = -15; val n = unhappinessUniques(c).count { it.second }; c.stats.happiness = saved; n }
+    println("  [stats] active at -15 happiness: $activeNow")
+    check(activeNow > 0, "no unhappiness effect active at -15 happiness")
+    t.act(a, "ip_sv", emptyList(), "ip:econ", "stats breakdown: Unhappiness uniques table")
+    fieldsOk("econ unhappiness")
+
+    // ---- 🌐 politics diagram (GlobalPoliticsDiagramGroup): temporarily a war + a defensive pact so every colour shows
+    val home0 = System.getProperty("civbot.home") ?: "../../.."
+    val diag = t.eng { g ->
+        val civ = GameOps.civOf(g, a)
+        val known = civ.getKnownCivs().filter { it.isMajorCiv && it.isAlive() }.toList()
+        val restore = ArrayList<() -> Unit>()
+        fun setStatus(x: Civilization, y: Civilization, st: com.unciv.logic.civilization.diplomacy.DiplomaticStatus) {
+            for ((p, q) in listOf(x to y, y to x)) p.diplomacy[q.civID]?.let { dm -> val old = dm.diplomaticStatus; dm.diplomaticStatus = st; restore += { dm.diplomaticStatus = old } }
+        }
+        try {
+            known.getOrNull(0)?.let { setStatus(civ, it, com.unciv.logic.civilization.diplomacy.DiplomaticStatus.War) }
+            known.getOrNull(1)?.let { setStatus(civ, it, com.unciv.logic.civilization.diplomacy.DiplomaticStatus.DefensivePact) }
+            val majors = diagramCivs(civ, false); val withCs = diagramCivs(civ, true)
+            val lines = diagramLines(withCs)
+            java.io.File(home0, "selftest-out/ip-politics-diagram.png").writeBytes(politicsDiagramPng(civ, false))
+            java.io.File(home0, "selftest-out/ip-politics-diagram-cs.png").writeBytes(politicsDiagramPng(civ, true))
+            val stranger = g.civilizations.firstOrNull { it != civ && !it.isBarbarian && !civ.knows(it) }
+            Triple("majors=${majors.size} withCs=${withCs.size} lines=${lines.groupingBy { it.third }.eachCount()}",
+                (known.isEmpty() || lines.any { it.third == InfoStats.Relation.War }) && withCs.size >= majors.size && majors.none { it.isCityState },
+                stranger == null || stranger !in withCs)
+        } finally { restore.forEach { it() } }
+    }
+    println("  [politics] diagram: ${diag.first}")
+    check(diag.second, "diagram lines wrong: ${diag.first}")
+    check(diag.third, "unknown civ on the diagram")
+    t.act(a, "ip_sv", emptyList(), "ip:pol", null)
+    check(t.act(a, "ip_pcs", emptyList(), null, "politics diagram (PNG, city-state toggle)"), "cs toggle")
+    check(stats(st).diagramCs, "city-states not toggled on")
+    fieldsOk("politics cs"); t.render(a, "ip-stats-politics-cs")
+    t.act(a, "ip_pcs", emptyList(), null, null)
+    check(!stats(st).diagramCs, "city-states not toggled off")
 
     // gold -> science slider (only with the ConvertGoldToScience mod option — cheat it in)
     val unique = com.unciv.models.ruleset.unique.Unique("Can convert gold to science with sliders")
