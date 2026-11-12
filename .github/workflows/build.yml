@@ -1,0 +1,35 @@
+name: Build & self-test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('setup.sh', 'bot/build.gradle.kts') }}
+      - name: Setup (fetch Unciv, patch, build)
+        run: ./setup.sh
+      - name: Offline self-test (plays a game, checks every feature)
+        run: |
+          ./run.sh --selftest | tee selftest.log
+          grep -q "^Errors: 0" selftest.log
+      - name: Upload panel screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selftest-panels
+          path: selftest-out/*.png

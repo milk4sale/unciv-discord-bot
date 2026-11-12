@@ -1,0 +1,213 @@
+# How to play
+
+Everything happens inside Discord. You don't install anything: you click buttons, pick from
+dropdowns and read map images. If you've played Civilization V, you already know the rules.
+CivBot uses the real Unciv engine.
+
+- [Starting a game](#starting-a-game)
+- [How turns work](#how-turns-work)
+- [Your private panel](#your-private-panel)
+- [Reading the map](#reading-the-map)
+- [The tabs](#the-tabs): [Units](#️-units) · [Cities](#️-cities) · [Research](#-research) · [Policies](#-policies) · [Religion](#-religion) · [Diplomacy](#-diplomacy) · [City-states](#-city-states) · [Overview](#-overview) · [Map](#️-map)
+- [Auto-pick and ending your turn](#auto-pick-and-ending-your-turn)
+- [Tips](#tips)
+
+---
+
+## Starting a game
+
+1. In any channel the bot can see, type **`/civ new`**. Optional extras appear as you type:
+   `name`, `speed`, `city_states`, `barbarians`, `fog`, `thread`.
+2. The bot posts a **lobby**:
+   - **➕ Join** takes a seat (the person who ran `/civ new` is already in, as host 👑).
+   - **🏳️ Pick nation** chooses your civilization, or leave it on 🎲 random.
+   - **Leave** gives your seat back.
+3. The **host** sets map size, map type, difficulty and the number of AI opponents in the
+   dropdowns. **⚙️ Settings** has more options (see [HOSTING.md](HOSTING.md)).
+4. The host clicks **▶️ Start**. The world is generated and the game moves into its own
+   **thread**, with a pinned **board** showing the turn, year, scoreboard and recent events.
+
+You can play solo (just you against AIs) or with as many friends as you like, up to 12
+civilizations in total.
+
+## How turns work
+
+Turns are taken **one player at a time**, like a board game played by mail:
+
+1. The bot pings the current player in the game thread: *"⏰ @you, it's your turn"*.
+2. That player clicks **🎮 Play my turn**, makes their moves and clicks **✅ End turn**.
+3. All AI civilizations move automatically, then the next human is pinged.
+
+There's no time pressure: a game can run over an evening or over weeks. If someone takes more
+than 12 hours, the bot reminds them. The host can also turn on AFK auto-skip.
+
+Not your turn? You can still open your panel and look around. Actions stay greyed out until
+it's your turn.
+
+## Your private panel
+
+Click **🎮 Play my turn** on any turn ping, **Open my panel** on the board, or type `/civ play`.
+The panel is **only visible to you** ("Only you can see this"), so your map, units and plans
+stay secret.
+
+The panel has:
+
+- **Title:** your leader, the turn number and the year.
+- **Status line:** whether it's your turn, then your 💰 gold, 🔬 science, 🎭 culture, 😊
+  happiness and 🙏 faith.
+- **Messages** at the top: the result of what you just did, e.g. *"⚔️ Warrior attacked: dealt 34, took 12"*.
+- **📰 News:** what happened since your last turn.
+- **📝 This turn:** a checklist of things you probably want to do (pick research, set
+  production, units awaiting orders…).
+- **The map image** for the current tab.
+- **Controls:** the tab dropdown at the top, then that tab's buttons and menus.
+
+Each click updates the same panel in place. If you leave it for a long time and a click stops
+working, just open it again.
+
+## Reading the map
+
+- Every tile has a **code** like `D5`: a column letter and a row number, like a chess board.
+  Codes belong to the image you're looking at; they shift when the view moves.
+- **Coloured edges** are borders, in each civilization's colour.
+- **Circles with a figure** are units, filled with the owner's colour. A green bar under a unit
+  is its health.
+- **Banners** like `3 Rome ★` are cities: population, name, and a ★ for capitals. The bar
+  under a banner is the city's health.
+- **Highlights** when a unit is selected: lighter tiles are reachable this turn, red outlines
+  can be attacked, and the gold outline is the selected unit or tile.
+- **Fog:** dark tiles are unexplored. Dimmed tiles were seen before but aren't visible now, so
+  enemy units there are hidden.
+
+## The tabs
+
+Switch tabs with the **dropdown at the top** of the panel.
+
+### ⚔️ Units
+
+- **Select a unit** from the first dropdown. Units still waiting for orders come first.
+  ⏭️ **Next** jumps to the next unit that needs orders, and after a unit runs out of moves the
+  panel selects the next one automatically.
+- **Arrow buttons** (↖ ⬆ ↗ ↙ ⬇ ↘) move one tile in that direction. Moving into an enemy you can
+  attack makes the attack.
+- **🎯 Go to…** opens a box: type a tile code (`F4`) or the name of a city you've seen. Long
+  trips continue automatically on later turns.
+- **Unit actions** dropdown, showing only what's possible right now:
+  - **Found city** (settlers)
+  - **Build …** (workers: farm, mine, road, lumber mill, remove forest…) or **Stop building**
+  - **Attack …** lists every enemy in range, with their health
+  - **Promote: …** when a unit has enough experience
+  - **Upgrade**, **Pillage**, **Paradrop**, **Set up**, **Guard**, **Repair**
+  - **Great People:** hurry research or production, conduct a trade mission, create great improvements
+  - **Religious units:** found or enhance a religion, spread religion, remove heresy
+  - **Escort with …** pairs a civilian with a military unit on the same tile, so they move together
+  - **Fortify**, **Sleep**, **Explore** (automatic scouting), **Automate** (the AI runs the unit),
+    **Wake up** (cancels standing orders), **Skip this turn**, **Disband**
+
+> You can only attack civilizations you're **at war** with. Barbarians are always fair game.
+> Declare war in 🤝 **Diplomacy**.
+
+### 🏙️ Cities
+
+- **Select a city**, or use ◀️ / ▶️ to cycle through them.
+- The info card shows yields, growth, what's being built and how long it'll take, the queue,
+  citizen focus, health, religion and buildings.
+- **Change production:** units 🪖, buildings 🏠 and wonders 🏛️, with turns to build. You can
+  also convert production into gold or science.
+- **📋 Queue: on** makes production picks join the build queue instead of replacing the
+  current item.
+- **City actions** dropdown:
+  - **Buy … for N gold** (and **Buy … with faith** for religious units)
+  - **Bombard …:** the city shoots an enemy unit in range
+  - **Focus:** food, production, gold, science, culture, faith or default (citizens re-arrange to match)
+  - **Buy tile Xn:** the cheapest tiles you can buy, labelled with their map code
+  - **Annex** a puppet city, **Raze** a city, **Stop razing**, **Clear the build queue**
+
+### 🔬 Research
+
+- **Research next** lists the techs available now, with turns and what each one unlocks.
+- **Set a long-term goal** queues every tech needed to reach a later tech.
+- Free techs (from Great Scientists, wonders and so on) show up here; just pick one.
+
+### 📜 Policies
+
+When you have enough 🎭 culture, the dropdown lists every policy you can adopt. 📖 opens a new
+policy tree, and 📜 continues one you've already opened.
+
+### 🙏 Religion
+
+- Shows your faith, your pantheon or religion, and how many religions can still be founded.
+- **Pantheon:** once you have enough faith, pick a pantheon belief from the dropdown.
+- **Founding a religion:** use a Great Prophet's *Found a religion* action (⚔️ Units tab),
+  then come here. Pick a **name** and your **beliefs**, then click **⛪ Found religion**.
+  Enhancing works the same way with an *Enhance religion* action.
+- If you get more beliefs than the panel can show at once (some bonuses grant extra), press
+  🤖 **Auto-pick** and the advisor chooses them.
+
+### 🤝 Diplomacy
+
+- Lists every civilization you've met, with your relationship and their score.
+- **Choose a civilization**, then build a deal:
+  - **You give…** and **You ask for…** let you pick several items each: gold (one-off amounts),
+    gold per turn, luxury and strategic resources, technologies, embassies, open borders,
+    research agreements, defensive pacts, and peace when at war.
+  - **🤝 Propose deal:** AIs answer right away. A human player gets the offer in the game thread
+    with **Accept / Decline** buttons.
+- **🔥 War** declares war, and **🕊️ Peace** proposes peace when you're at war.
+- **💛 Friendship** proposes a Declaration of Friendship. When friendship isn't possible, that
+  slot shows **😠 Denounce** instead.
+
+### 🏰 City-states
+
+- Pick a city-state to see its type, your **influence**, its current **ally**, its protectors
+  and **quests it has for you**.
+- **Actions:** gift 250/500/1000 gold, pledge or withdraw protection, and demand gold or a
+  worker as tribute (only listed when they'd actually give in).
+- **War / Peace** with city-states is here too.
+
+### 📊 Overview
+
+Your empire at a glance: cities, population, units, era, golden age progress, income per turn,
+the happiness breakdown, resources, Great People points, rankings against everyone else, which
+victory types are in play, and recent history.
+
+When you earn a **free Great Person**, choose it here.
+
+### 🗺️ Map
+
+- Arrow buttons **scroll** the view, and 🏠 **Home** jumps back to your capital.
+- **🔍 Inspect…** opens a box: type a tile code to see its terrain, yields, resource,
+  improvement, owner and any units on it.
+- **🌍 World** shows everything you've explored on one image; **🔎 Zoomed** goes back.
+
+## Auto-pick and ending your turn
+
+- **🤖 Auto-pick** asks Unciv's AI to fill in anything you haven't chosen: research,
+  production in idle cities, a policy you can afford, religious beliefs. It never moves your units.
+- The advisor also always takes care of spies, World Congress votes and replies to AI demands,
+  since those have no screen in the bot.
+- **✅ End turn:** if the 📝 checklist still has items, the first click warns you and the
+  button turns into **⚠️ End anyway**. Click again to end regardless.
+- Anything you left unpicked is filled in by the advisor when the turn ends, so the game never
+  gets stuck.
+
+## Captured cities
+
+When you capture a city, Unciv first applies its default (usually puppet, or annex for your
+old capital). The panel then asks what you want:
+
+- **Keep it as is**
+- **Annex** (full control, more unhappiness)
+- **Raze** (burn it down over several turns)
+- **Spare it** (stop razing)
+- **Liberate** (give it back to its founder for a big relationship boost)
+
+## Tips
+
+- **Automate workers** (Unit actions → Automate) to save lots of clicks.
+- **Explore** sends a scout out on its own, and **Go to** handles long trips over several turns.
+- **Set a research goal** so you don't have to pick a tech every few turns.
+- **Turn on 📋 Queue** to plan several items per city at once.
+- **The 🗺️ Map tab's 🔍 Inspect** is the quickest way to judge a city site before founding.
+- Lost track of the game? `/civ games` lists yours, and `/civ board` re-posts the board.
+- Can't continue? `/civ leave` hands your civilization to the AI, so the others can keep playing.

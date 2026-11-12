@@ -1,0 +1,13 @@
+# secrets & game saves — never commit
+.env
+data/
+
+# build outputs and the Unciv checkout (setup.sh fetches it)
+unciv/
+bot/build/
+.gradle/
+.kotlin/
+
+# local test output
+selftest-out/
+*.log

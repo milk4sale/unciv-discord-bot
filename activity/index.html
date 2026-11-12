@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Civ Panel</title>
+<style>
+  :root { --bg:#1e1f22; --panel:#2b2d31; --text:#dbdee1; --muted:#949ba4; --blue:#5865f2; --green:#248046; --red:#da373c; --grey:#4e5058; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui, sans-serif; }
+  #app { max-width: 1100px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 18px; margin: 0 0 6px; }
+  .card { background: var(--panel); border-radius: 8px; padding: 14px; margin-bottom: 12px; border-left: 4px solid var(--blue); }
+  .desc { white-space: pre-wrap; }
+  .field h3 { font-size: 14px; margin: 10px 0 2px; }
+  .field div { white-space: pre-wrap; color: var(--text); }
+  img.map { width: 100%; image-rendering: pixelated; border-radius: 6px; margin-top: 10px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+  button { border: 0; border-radius: 4px; padding: 8px 14px; color: #fff; background: var(--grey); cursor: pointer; font: inherit; }
+  button.s1 { background: var(--blue); } button.s3 { background: var(--green); } button.s4 { background: var(--red); }
+  button:disabled { opacity: .45; cursor: default; }
+  select { flex: 1; min-width: 220px; padding: 8px; border-radius: 4px; background: var(--bg); color: var(--text); border: 1px solid var(--grey); font: inherit; }
+  .err { color: #fa777c; margin: 6px 0; }
+  .muted { color: var(--muted); }
+</style>
+</head>
+<body>
+<div id="app"><p class="muted">Connecting to Discord…</p></div>
+<script type="module">
+// Loaded through a Developer Portal URL mapping:  /npm  ->  cdn.jsdelivr.net/npm
+import { DiscordSDK } from "/.proxy/npm/@discord/embedded-app-sdk@1/+esm";
+
+const CLIENT_ID = "%CLIENT_ID%";
+const app = document.getElementById("app");
+let token = null, gid = null;
+
+const api = (path, opts = {}) => fetch("/.proxy/api" + path, {
+  ...opts, headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json", ...(opts.headers || {}) }
+});
+
+function md(s) { // tiny markdown: escape, then **bold**, _italic_, mentions
+  return (s || "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]))
+    .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/(^|\s)_(.+?)_/g, "$1<i>$2</i>")
+    .replace(/&lt;@!?(\d+)&gt;/g, "@player").replace(/&lt;#(\d+)&gt;/g, "#channel");
+}
+
+async function render(data) {
+  if (data.error && !data.embed) { app.innerHTML = `<p class="err">${md(data.error)}</p>`; return; }
+  const e = data.embed;
+  const color = e.color ? "#" + e.color.toString(16).padStart(6, "0") : "var(--blue)";
+  let html = `<div class="card" style="border-left-color:${color}"><h1>${md(e.title)}</h1>`;
+  if (data.error) html += `<p class="err">❌ ${md(data.error)}</p>`;
+  html += `<div class="desc">${md(e.description)}</div>`;
+  for (const f of e.fields || []) html += `<div class="field"><h3>${md(f.name)}</h3><div>${md(f.value)}</div></div>`;
+  html += `<img class="map" id="map" alt="map"></div><div id="controls"></div>`;
+  app.innerHTML = html;
+
+  const res = await api("/map?gid=" + gid);
+  if (res.ok) document.getElementById("map").src = URL.createObjectURL(await res.blob());
+
+  const controls = document.getElementById("controls");
+  for (const row of data.components || []) {
+    const div = document.createElement("div"); div.className = "row";
+    for (const c of row.components) {
+      if (c.type === 2) { // button
+        const b = document.createElement("button");
+        b.className = "s" + c.style; b.disabled = !!c.disabled;
+        b.textContent = (c.emoji ? c.emoji.name + " " : "") + (c.label || "");
+        b.onclick = async () => {
+          let value = null;
+          const verb = c.custom_id.split("|")[2];
+          if (verb === "goto" || verb === "inspect") {
+            value = prompt(verb === "goto" ? "Move to which tile? (a code from the map like D5, or a city name)" : "Inspect which tile? (e.g. D5)");
+            if (!value) return;
+          }
+          act(c.custom_id, value);
+        };
+        div.appendChild(b);
+      } else if (c.type === 3) { // select
+        const s = document.createElement("select"); s.disabled = !!c.disabled;
+        if ((c.max_values || 1) > 1) { s.multiple = true; s.size = Math.min(6, c.options.length); }
+        s.innerHTML = `<option value="">${md(c.placeholder || "Choose…")}</option>` + c.options.map(o =>
+          `<option value="${o.value}" ${o.default ? "selected" : ""}>${o.emoji ? o.emoji.name + " " : ""}${md(o.label)}${o.description ? " — " + md(o.description) : ""}</option>`).join("");
+        s.onchange = () => {
+          if (s.multiple) act(c.custom_id, [...s.selectedOptions].map(o => o.value).filter(Boolean).join("\n"));
+          else if (s.value) act(c.custom_id, s.value);
+        };
+        div.appendChild(s);
+      }
+    }
+    controls.appendChild(div);
+  }
+}
+
+async function act(id, value) {
+  const r = await api("/action", { method: "POST", body: JSON.stringify({ gid, id, value }) });
+  render(await r.json());
+}
+
+async function main() {
+  const sdk = new DiscordSDK(CLIENT_ID);
+  await sdk.ready();
+  const { code } = await sdk.commands.authorize({ client_id: CLIENT_ID, response_type: "code", state: "", prompt: "none", scope: ["identify"] });
+  const tok = await fetch("/.proxy/api/token", { method: "POST", body: JSON.stringify({ code }) }).then(r => r.json());
+  token = tok.access_token;
+  await sdk.commands.authenticate({ access_token: token });
+
+  const games = await api("/games").then(r => r.json());
+  if (!games.length) { app.innerHTML = `<p>You're not in any running games. Start one in a channel with <b>/civ new</b>.</p>`; return; }
+  if (games.length === 1) { gid = games[0].id; return refresh(); }
+  app.innerHTML = `<h1>Pick a game</h1>` + games.map(g => `<p><button class="s1" data-id="${g.id}">${md(g.name)}</button></p>`).join("");
+  app.querySelectorAll("button").forEach(b => b.onclick = () => { gid = b.dataset.id; refresh(); });
+}
+async function refresh() { render(await api("/panel?gid=" + gid).then(r => r.json())); }
+
+main().catch(e => { app.innerHTML = `<p class="err">Couldn't start: ${md(String(e))}</p>`; });
+</script>
+</body>
+</html>
