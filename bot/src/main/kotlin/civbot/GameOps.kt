@@ -652,6 +652,7 @@ object GameOps {
     fun declareWar(civ: Civilization, other: Civilization): String {
         val dm = civ.getDiplomacyManager(other) ?: throw PlayerError("You haven't met them.")
         if (civ.isAtWarWith(other)) throw PlayerError("Already at war.")
+        DiplomacyPlus.warBlockedByRules(civ)?.let { throw PlayerError(it) } // mod unique: relationships can't change
         if (!dm.canDeclareWar()) throw PlayerError("You can't declare war on them right now (treaty in effect).")
         dm.declareWar()
         return "🔥 ${civ.civName} declared war on ${other.civName}!"
@@ -664,14 +665,10 @@ object GameOps {
         return tl
     }
 
-    /** AI civs decide right away; for humans the caller asks the other player. */
+    /** Like Unciv's "Negotiate Peace": the treaty goes to the AI's trade requests and it decides on its turn. */
     fun proposePeaceToAI(civ: Civilization, other: Civilization): String {
         if (!civ.isAtWarWith(other)) throw PlayerError("You're not at war with them.")
-        val tl = peaceTrade(civ, other)
-        val acceptable = TradeEvaluation().isTradeAcceptable(tl.currentTrade.reverse(), other, civ)
-        if (!acceptable) return "🕊️ ${other.civName} refused peace. (Try again after a few turns, or win a battle first.)"
-        tl.acceptTrade()
-        return "🕊️ Peace signed between ${civ.civName} and ${other.civName}."
+        return DiplomacyPlus.offerToAI(peaceTrade(civ, other))
     }
 
     fun makePeace(a: Civilization, b: Civilization): String {

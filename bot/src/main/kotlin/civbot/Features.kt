@@ -66,7 +66,7 @@ object Features {
 
     private fun encode(o: TradeOffer, amount: Int) = "t~${o.type.name}~$amount~${o.name}".take(100)
 
-    private fun offerChoices(game: com.unciv.logic.GameInfo, offers: List<TradeOffer>, side: String): List<Choice> {
+    private fun offerChoices(game: com.unciv.logic.GameInfo, offers: List<TradeOffer>, side: String, otherSide: List<TradeOffer> = emptyList()): List<Choice> {
         val out = ArrayList<Choice>()
         for (o in offers) {
             if (!o.isTradable()) continue // e.g. no gold, negative gold per turn, peace proposals not allowed yet
@@ -96,10 +96,9 @@ object Features {
                     out += if (o.type == TradeOfferType.Introduction) Choice("$side${encode(o, o.amount)}", "Introduction to ${third.civName}", "they meet each other", "👋")
                     else Choice("$side${encode(o, o.amount)}", "Make peace with ${third.civName}", "ends that war", "🕊️")
                 }
-                TradeOfferType.Luxury_Resource -> out += Choice("$side${encode(o, 1)}", "${o.name} ×1", "luxury resource (you have ${o.amount})", "💎")
-                TradeOfferType.Strategic_Resource, TradeOfferType.Stockpiled_Resource -> listOf(1, o.amount).distinct().forEach {
-                    out += Choice("$side${encode(o, it)}", "${o.name} ×$it", "strategic resource", "⛏️")
-                }
+                // any amount 1..N (✏️ popup) and Unciv's green highlight for what the other side lacks
+                TradeOfferType.Luxury_Resource, TradeOfferType.Strategic_Resource, TradeOfferType.Stockpiled_Resource ->
+                    out += DiplomacyPlus.resourceChoices(side, o, otherSide)
                 else -> out += Choice("$side${encode(o, o.amount)}", GameOps.clean(o.name), o.type.name.replace('_', ' ').lowercase(),
                     when (o.type) {
                         TradeOfferType.Luxury_Resource -> "💎"; TradeOfferType.Technology -> "🔬"; TradeOfferType.Treaty -> "📜"
@@ -115,7 +114,8 @@ object Features {
         if (civ.getDiplomacyManager(other) == null || other.isCityState) return emptyList<Choice>() to emptyList()
         val tl = TradeLogic(civ, other)
         val ok = { o: TradeOffer -> DiplomacyPlus.offerAllowed(civ, other, o) }
-        return offerChoices(civ.gameInfo, tl.ourAvailableOffers.filter(ok), "g") to offerChoices(civ.gameInfo, tl.theirAvailableOffers.filter(ok), "a")
+        return offerChoices(civ.gameInfo, tl.ourAvailableOffers.filter(ok), "g", tl.theirAvailableOffers) to
+            offerChoices(civ.gameInfo, tl.theirAvailableOffers.filter(ok), "a", tl.ourAvailableOffers)
     }
 
     fun buildTrade(civ: Civilization, other: Civilization, give: List<String>, ask: List<String>): TradeLogic {
@@ -157,24 +157,17 @@ object Features {
         (tl.currentTrade.ourOffers.isNotEmpty() || tl.currentTrade.theirOffers.isNotEmpty()) &&
             TradeEvaluation().isTradeValid(tl.currentTrade, tl.ourCivilization, tl.otherCivilization)
 
-    fun proposeTradeToAI(tl: TradeLogic): String {
-        if (!tradeIsValid(tl)) throw PlayerError("That trade isn't possible any more — pick again.")
-        val other = tl.otherCivilization
-        val ok = TradeEvaluation().isTradeAcceptable(tl.currentTrade.reverse(), other, tl.ourCivilization)
-        if (!ok) return "🤝 ${other.civName} declined: ${describeTrade(tl)}. Try offering more."
-        tl.acceptTrade()
-        return "🤝 Deal! ${describeTrade(tl)}"
-    }
+    /** Like Unciv's TradeTable: the deal goes to the AI's trade requests, decided (or countered) on its turn. */
+    fun proposeTradeToAI(tl: TradeLogic): String = DiplomacyPlus.offerToAI(tl)
 
     fun friendshipAvailable(civ: Civilization, other: Civilization) =
-        !other.isCityState && civ.diplomacyFunctions.canSignDeclarationOfFriendshipWith(other)
+        !other.isCityState && civ.diplomacyFunctions.canSignDeclarationOfFriendshipWith(other) &&
+            other.popupAlerts.none { it.type == AlertType.DeclarationOfFriendship && it.value == civ.civID } // already offered
 
+    /** Unciv's "Offer Declaration of Friendship": a popup alert the AI answers on its turn (respondToDeclarationOfFriendship). */
     fun befriendAI(civ: Civilization, other: Civilization): String {
-        val view = GameView(other.gameInfo, other).civView
-        val wants = Engine.callHiddenResult(DiplomacyAutomation, "wantsToSignDeclarationOfFrienship", view, civ) as? Boolean ?: false
-        if (!wants) return "💛 ${other.civName} isn't ready to declare friendship yet."
-        civ.getDiplomacyManager(other)!!.signDeclarationOfFriendship()
-        return "💛 ${civ.civName} and ${other.civName} declared friendship!"
+        other.popupAlerts.add(PopupAlert(AlertType.DeclarationOfFriendship, civ.civID))
+        return "💛 Declaration of Friendship offered to ${other.civName} — they'll answer on their turn."
     }
 
     fun signFriendship(a: Civilization, b: Civilization): String {
@@ -216,28 +209,16 @@ object Features {
         if (civ.isAtWarWith(cs)) return out
         for (g in listOf(250, 500, 1000)) if (civ.gold >= g)
             out += Choice("gift:$g", "Gift $g gold", "+${f.influenceGainedByGift(civ, g)} influence", "🎁")
-        if (f.otherCivCanPledgeProtection(civ)) out += Choice("pledge", "Pledge to protect", "Others lose influence if they attack it", "🛡️")
-        if (f.otherCivCanWithdrawProtection(civ)) out += Choice("revoke", "Withdraw protection", "", "🚫")
+        // pledge / revoke go through DiplomacyPlus's ⚠️ confirm step (Unciv's ConfirmPopup)
+        if (f.otherCivCanPledgeProtection(civ)) out += Choice("do:dp_csask:pledge", "Pledge to protect", "Others lose influence if they attack it (asks to confirm)", "🛡️")
+        if (f.otherCivCanWithdrawProtection(civ)) out += Choice("do:dp_csask:revoke", "Withdraw protection", "-20 influence (asks to confirm)", "🚫")
         if (f.getTributeWillingness(civ) >= 0) out += Choice("tribgold", "Demand ${f.goldGainedByTribute()} gold tribute", "-15 influence", "💰")
         if (f.getTributeWillingness(civ, demandingWorker = true) >= 0) out += Choice("tribworker", "Demand a worker as tribute", "-50 influence", "🔨")
         return out + DiplomacyPlus.cityStateGiftChoices(civ, cs)
     }
 
-    fun doCityState(civ: Civilization, cs: Civilization, id: String): String {
-        val f = cs.cityStateFunctions
-        return when {
-            id.startsWith("gift:") -> {
-                val g = id.removePrefix("gift:").toInt()
-                if (civ.gold < g) throw PlayerError("Not enough gold.")
-                f.receiveGoldGift(civ, g); "🎁 Gave $g gold to ${cs.civName}."
-            }
-            id == "pledge" -> { f.addProtectorCiv(civ); "🛡️ You now protect ${cs.civName}." }
-            id == "revoke" -> { f.removeProtectorCiv(civ); "🚫 You no longer protect ${cs.civName}." }
-            id == "tribgold" -> { f.tributeGold(civ); "💰 ${cs.civName} paid tribute." }
-            id == "tribworker" -> { f.tributeWorker(civ); "🔨 ${cs.civName} handed over a worker." }
-            else -> throw PlayerError("Unknown action.")
-        }
-    }
+    /** City-state actions, re-checked at click time (the panel may be stale): see DiplomacyPlus.cityStateAction. */
+    fun doCityState(civ: Civilization, cs: Civilization, id: String): String = DiplomacyPlus.cityStateAction(civ, cs, id)
 
     // ================================================================== city management
 

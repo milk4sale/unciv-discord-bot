@@ -682,8 +682,8 @@ class Bot(override val store: Store, override val ctl: Controller) : ListenerAda
     }
 
     private fun proposalAnswer(event: GenericComponentInteractionCreateEvent, s: Session, accept: Boolean, args: List<String>) {
-        val p = ctl.proposals[args.firstOrNull() ?: ""]
-            ?: return event.editMessage("This offer has expired (the bot restarted or it was already answered).").setComponents().queue()
+        val p = ctl.findProposal(s, args.firstOrNull() ?: "")
+            ?: return event.editMessage("This offer is no longer open (it was answered or withdrawn).").setComponents().queue()
         val toSeat = s.meta.seatOfCiv(p.toCiv)
         if (toSeat?.userId != event.user.id) return event.reply("Only <@${toSeat?.userId}> can answer this.").setEphemeral(true).queue()
         event.deferEdit().queue()
