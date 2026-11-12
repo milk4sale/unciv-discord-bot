@@ -271,13 +271,13 @@ object Panel {
                         val target = t.militaryUnit ?: t.civilianUnit
                         cityActs += Choice("bomb:${t.position.x},${t.position.y}", "Bombard ${target?.civ?.civName ?: ""} ${target?.label() ?: "target"}", "City ranged attack", "🎯")
                     }
-                    cityActs += GameOps.buyChoices(city).take(9)
-                    cityActs += Features.faithBuyChoices(city).take(4)
+                    cityActs += GameOps.buyChoices(city)
+                    cityActs += Features.faithBuyChoices(city)
                     cityActs += Extensions.all.flatMap { runCatching { it.cityChoices(city, st.window) }.getOrDefault(emptyList()) }
                     cityActs += Features.cityExtraChoices(city, st.window)
                 }
                 cityActs.sortBy { if (it.id == "do:cp_undo") 0 else 1 } // ↩️ Undo always first
-                rows += ActionRow.of(select(id(gid, "cact"), if (cityActs.isEmpty()) "No city actions right now" else "Buy, bombard, focus, tiles, raze…", cityActs.take(25), enabled = myTurn))
+                rows += ActionRow.of(select(id(gid, "cact"), if (cityActs.isEmpty()) "No city actions right now" else "Buy, bombard, focus, tiles, raze…", cityActs, enabled = myTurn))
                 endRow += listOf(
                     btn(gid, "cprev", "Prev", "◀️", enabled = cities.size > 1),
                     btn(gid, "cnext", "Next", "▶️", enabled = cities.size > 1),

@@ -33,6 +33,10 @@ import com.unciv.models.metadata.GameSetupInfo
 import com.unciv.models.metadata.Player
 import com.unciv.models.ruleset.Building
 import com.unciv.models.ruleset.INonPerpetualConstruction
+import com.unciv.models.ruleset.PerpetualConstruction
+import com.unciv.models.ruleset.unique.UniqueType
+import com.unciv.logic.automation.Automation
+import kotlin.math.roundToInt
 import com.unciv.models.ruleset.unit.BaseUnit
 import com.unciv.models.stats.Stat
 import com.unciv.view.GameView
@@ -408,36 +412,108 @@ object GameOps {
             }
             Triple(c, turns, kind)
         }.sortedWith(compareBy({ it.third == "🏛️" }, { it.second }))
-        val perpetual = city.getRuleset().buildings.let { emptyList<Choice>() } + listOfNotNull(
-            Choice("prod:Gold", "Convert production to gold", "Perpetual", "💰").takeIf { cc.getConstructableUnits().any() },
-            Choice("prod:Science", "Convert production to science", "Perpetual", "🔬"),
-        )
-        return all.map { (c, turns, kind) -> Choice("prod:${c.name}", c.name, "$turns turns", kind) } + perpetual
+        return all.map { (c, turns, kind) -> Choice("prod:${c.name}", c.name, "$turns turns", kind) } + perpetualChoices(city)
+    }
+
+    /** Every perpetual construction Unciv has (gold, science, culture, faith, food, nothing) that this city may use. */
+    fun perpetualChoices(city: City): List<Choice> =
+        PerpetualConstruction.perpetualConstructionsMap.values.filter { it.isBuildable(city.cityConstructions) }.map { p ->
+            if (p is PerpetualConstruction.StatConversion) {
+                val perTurn = (city.cityStats.currentCityStats.production / p.getConversionRate(city)).roundToInt()
+                val e = mapOf(Stat.Gold to "💰", Stat.Science to "🔬", Stat.Culture to "🎭", Stat.Faith to "🙏", Stat.Food to "🍞")[p.stat] ?: "♾️"
+                Choice("prod:${p.name}", "Convert production to ${p.name.lowercase()}", "Perpetual · about $perTurn ${p.name.lowercase()} per turn", e)
+            } else Choice("prod:${p.name}", "Produce nothing", "Perpetual · the city idles", "⏸️")
+        }
+
+    /** Ruleset lookup by name (CityConstructions.getConstruction is internal to Unciv). */
+    fun construction(city: City, name: String): com.unciv.models.ruleset.IConstruction =
+        city.getRuleset().units[name] ?: city.getRuleset().buildings[name] ?: PerpetualConstruction.perpetualConstructionsMap[name]
+            ?: throw PlayerError("Unknown construction $name.")
+
+    /** [UniqueType.CreatesOneImprovement] buildings need a target tile marked before they are queued (Unciv throws otherwise).
+     *  Uses [tile], an already marked tile, or the best free tile. Returns null for ordinary constructions. */
+    fun markImprovementTile(city: City, name: String, tile: Tile? = null): Tile? {
+        val b = city.getRuleset().buildings[name] ?: return null
+        val imp = b.getImprovementToCreate(city.getRuleset(), city.civ) ?: return null
+        val cc = city.cityConstructions
+        val marked = cc.getTileForImprovement(imp.name)
+        if (marked != null && (tile == null || tile == marked)) return marked
+        if (tile != null && !cc.canPlaceCreateOneImprovementOn(imp, tile))
+            throw PlayerError("A ${imp.name} can't be placed on that tile — pick one of ${city.name}'s own tiles where it can be built.")
+        val valid = city.getTiles().filter { cc.canPlaceCreateOneImprovementOn(imp, it) }.toList()
+        val t = tile ?: Automation.getTileForConstructionImprovement(city, imp)?.takeIf { it in valid } ?: valid.firstOrNull()
+            ?: throw PlayerError("No tile of ${city.name} can take a ${imp.name}.")
+        marked?.improvementFunctions?.removeCreatesOneImprovementMarker(removeConstruction = false)
+        if (!cc.tryPlaceCreateOneImprovementMarker(imp, t)) throw PlayerError("Couldn't mark that tile for a ${imp.name}.")
+        return t
+    }
+
+    /** Add to the queue with Unciv's checks (canAddToQueue), placing "creates one improvement" markers first. */
+    fun queueConstruction(city: City, name: String, addToTop: Boolean = false, tile: Tile? = null): String {
+        if (city.isPuppet) throw PlayerError("Puppet cities choose their own production.")
+        val cc = city.cityConstructions
+        val c = construction(city, name)
+        if (!cc.canAddToQueue(c) || (c is PerpetualConstruction && name in cc.constructionQueue))
+            throw PlayerError(if (cc.isQueueFull()) "${city.name}'s queue is full." else "$name can't be added to ${city.name}'s queue.")
+        val t = markImprovementTile(city, name, tile)
+        cc.addToQueue(c, addToTop = addToTop, tile = t)
+        return "📋 Added **$name** to ${if (addToTop) "the top of " else ""}${city.name}'s queue" + (if (t != null) " (improvement tile marked)" else "") + "."
     }
 
     fun setProduction(city: City, name: String): String {
         if (city.isPuppet) throw PlayerError("Puppet cities choose their own production. Annex it first.")
+        markImprovementTile(city, name)
         city.cityConstructions.setCurrentConstruction(name)
         return "🏗️ ${city.name} is now building **$name**."
     }
 
-    fun buyChoices(city: City): List<Choice> {
-        if (city.isPuppet) return emptyList()
+    fun buyChoices(city: City): List<Choice> = purchaseChoices(city, Stat.statsUsableToBuy - Stat.Faith, "buy:")
+
+    /**
+     * Everything [city] may buy with [stats] right now (Unciv's buy buttons): the current build and queued items first
+     * (bought at their queue position), then everything else by price. Puppets only with MayBuyConstructionsInPuppets.
+     * Ids: "<prefix><Stat>~<queueIndex or -1>~<name>".
+     */
+    fun purchaseChoices(city: City, stats: Collection<Stat>, prefix: String): List<Choice> {
         val cc = city.cityConstructions
-        val candidates = (cc.getConstructableUnits().filter { it.isBuildable(cc) } +
-            city.getRuleset().buildings.values.filter { it.isBuildable(cc) }).toList()
-        return candidates.mapNotNull { c ->
-            val nc = c as? INonPerpetualConstruction ?: return@mapNotNull null
-            if (!nc.canBePurchasedWithStat(city, Stat.Gold)) return@mapNotNull null
-            val cost = nc.getStatBuyCost(city, Stat.Gold) ?: return@mapNotNull null
-            if (!cc.isConstructionPurchaseAllowed(nc, Stat.Gold, cost)) return@mapNotNull null
-            Choice("buy:${c.name}", "Buy ${c.name}", "$cost gold", "💰")
-        }.sortedBy { it.description.substringBefore(" ").toIntOrNull() ?: 0 }
+        if (city.isPuppet && city.getMatchingUniques(UniqueType.MayBuyConstructionsInPuppets).none()) return emptyList()
+        val rs = city.getRuleset()
+        val queue = cc.constructionQueue
+        val queued = queue.withIndex().mapNotNull { (i, n) -> ((rs.units[n] ?: rs.buildings[n]) as? INonPerpetualConstruction)?.let { i to it } }
+        val others = (rs.units.values.asSequence() + rs.buildings.values.asSequence()).filter { it.name !in queue }.map { -1 to it as INonPerpetualConstruction }
+        val emoji = mapOf(Stat.Gold to "💰", Stat.Faith to "🙏", Stat.Food to "🍞", Stat.Science to "🔬", Stat.Culture to "🎭")
+        val first = ArrayList<Choice>(); val rest = ArrayList<Pair<Int, Choice>>()
+        for (stat in stats) for ((idx, c) in queued.asSequence() + others) {
+            if (!c.canBePurchasedWithStat(city, stat)) continue
+            val cost = c.getStatBuyCost(city, stat) ?: continue
+            if (!cc.isConstructionPurchaseAllowed(c, stat, cost)) continue
+            val where = when (idx) { -1 -> ""; 0 -> " (building now)"; else -> " (queued #${idx + 1})" }
+            val ch = Choice("$prefix${stat.name}~$idx~${c.name}", "Buy ${c.name}$where", "$cost ${stat.name.lowercase()}" +
+                (if (c is Building && c.hasCreateOneImprovementUnique()) " · places its improvement" else ""), emoji[stat])
+            if (idx >= 0) first += ch else rest += cost to ch
+        }
+        return first + rest.sortedBy { it.first }.map { it.second }
     }
 
-    fun buy(city: City, name: String): String {
-        if (!city.cityConstructions.purchaseConstruction(name, -1, false, Stat.Gold)) throw PlayerError("Couldn't buy $name.")
-        return "💰 Bought **$name** in ${city.name}."
+    /** [spec] = "name" (legacy, gold) or "<Stat>~<queueIndex>~<name>" or "<queueIndex>~<name>" (with [defaultStat]). */
+    fun buy(city: City, spec: String, defaultStat: Stat = Stat.Gold): String {
+        val parts = spec.split("~", limit = 3)
+        val (stat, idx, name) = when (parts.size) {
+            3 -> Triple(Stat.safeValueOf(parts[0]) ?: defaultStat, parts[1].toIntOrNull() ?: -1, parts[2])
+            2 -> Triple(defaultStat, parts[0].toIntOrNull() ?: -1, parts[1])
+            else -> Triple(defaultStat, -1, spec)
+        }
+        val cc = city.cityConstructions
+        val c = construction(city, name) as? INonPerpetualConstruction ?: throw PlayerError("$name can't be bought.")
+        val pos = idx.takeIf { it >= 0 && cc.constructionQueue.getOrNull(it) == name } ?: -1
+        val cost = c.getStatBuyCost(city, stat) ?: throw PlayerError("$name can't be bought with ${stat.name.lowercase()}.")
+        if (!c.canBePurchasedWithStat(city, stat) || !cc.isConstructionPurchaseAllowed(c, stat, cost))
+            throw PlayerError("You can't buy $name in ${city.name} with ${stat.name.lowercase()} right now ($cost needed, you have ${city.getStatReserve(stat)}).")
+        // A queued "creates one improvement" building keeps the tile it already marked
+        val tile = (c as? Building)?.getImprovementToCreate(city.getRuleset(), city.civ)?.let { cc.getTileForImprovement(it.name) }?.takeIf { pos >= 0 }
+        if (!cc.purchaseConstruction(c, pos, false, stat, tile)) throw PlayerError("Couldn't buy $name — no room to place it near ${city.name}?")
+        val e = mapOf(Stat.Gold to "💰", Stat.Faith to "🙏", Stat.Food to "🍞", Stat.Science to "🔬", Stat.Culture to "🎭")[stat] ?: "💰"
+        return "$e Bought **$name** in ${city.name} for $cost ${stat.name.lowercase()}."
     }
 
     fun bombardTargets(city: City): List<Tile> =
@@ -451,7 +527,11 @@ object GameOps {
         return "🎯 ${city.name} bombarded ${def.getName()}: dealt **${before - def.getHealth()}**."
     }
 
-    fun annex(city: City): String { city.annexCity(); return "🏙️ ${city.name} annexed." }
+    fun annex(city: City): String { requireMayAnnex(city.civ); city.annexCity(); return "🏙️ ${city.name} annexed." }
+
+    /** Unciv's [UniqueType.MayNotAnnexCities] (e.g. Venice) */
+    fun mayAnnex(civ: Civilization) = !civ.hasUnique(UniqueType.MayNotAnnexCities)
+    fun requireMayAnnex(civ: Civilization) { if (!mayAnnex(civ)) throw PlayerError("Your civilization may not annex cities.") }
 
     fun pendingConquest(civ: Civilization): City? {
         val alert = civ.popupAlerts.firstOrNull { it.type == AlertType.CityConquered } ?: return null
@@ -467,11 +547,15 @@ object GameOps {
 
     fun conquestChoices(civ: Civilization, city: City): List<Choice> {
         val out = ArrayList<Choice>()
-        out += Choice("keep", "Keep it as is (${conquestStatus(city)})", "", "👍")
         val founder = city.foundingCivObject
+        val occ = civ.isOneCityChallenger()
+        if (!occ) out += Choice("keep", "Keep it as is (${conquestStatus(city)})", "", "👍")
         if (founder != null && founder != civ && founder.isAlive()) out += Choice("liberate", "Liberate (return to ${founder.civName})", "Big relationship boost", "🕊️")
-        if (city.isPuppet) out += Choice("annex", "Annex", "Part of your empire (more unhappiness)", "🏙️")
-        if (!city.isBeingRazed && city.canBeDestroyed(justCaptured = true)) out += Choice("raze", "Raze", "Burn it down over time", "🔥")
+        if (occ) { out += Choice("destroy", "Destroy", "One-City Challenge: the city is razed to the ground at once", "💥"); return out }
+        val mayAnnex = mayAnnex(civ)
+        if (city.isPuppet && mayAnnex) out += Choice("annex", "Annex", "Part of your empire (more unhappiness)", "🏙️")
+        if (!city.isBeingRazed && city.canBeDestroyed(justCaptured = true))
+            out += Choice("raze", "Raze", if (mayAnnex) "Annexes it and burns it down over time" else "Stays a puppet and burns down over time", "🔥")
         if (city.isBeingRazed) out += Choice("spare", "Spare it (stop razing)", "Keep the city", "🧯")
         return out
     }
@@ -480,10 +564,17 @@ object GameOps {
         civ.popupAlerts.removeAll { it.type == AlertType.CityConquered && it.value == city.id }
         return when (choice) {
             "liberate" -> { city.liberateCity(civ); "🕊️ ${city.name} liberated." }
-            "annex" -> { if (city.isPuppet) city.annexCity(); "🏙️ ${city.name} annexed." }
-            "raze" -> { if (city.isPuppet) city.annexCity(); city.isBeingRazed = true; "🔥 ${city.name} is being razed." }
+            "annex" -> { requireMayAnnex(civ); if (city.isPuppet) city.annexCity(); "🏙️ ${city.name} annexed." }
+            "raze" -> {
+                if (!city.canBeDestroyed(justCaptured = true)) throw PlayerError("Original capitals and holy cities can't be razed.")
+                if (city.isPuppet && mayAnnex(civ)) city.annexCity(); city.isBeingRazed = true; "🔥 ${city.name} is being razed."
+            }
             "spare" -> { city.isBeingRazed = false; "🧯 ${city.name} will be spared." }
-            else -> "👍 ${city.name} stays ${conquestStatus(city)}."
+            else -> if (civ.isOneCityChallenger()) {
+                // Unciv: a one-city challenger can only liberate or destroy (Battle destroys with overrideSafeties)
+                if (city.civ != civ) city.puppetCity(civ)
+                val name = city.name; city.destroyCity(overrideSafeties = true); "💥 $name was destroyed."
+            } else "👍 ${city.name} stays ${conquestStatus(city)}."
         }
     }
 
