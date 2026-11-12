@@ -49,6 +49,7 @@ class Controller(val store: Store) {
         val value = if (direct != null) null else valueIn
         val st = state(s.meta.id, seat.userId)
         val game = s.game ?: throw PlayerError("This game hasn't started yet.")
+        if (UnitsPlus.onPlayerAction(s, seat, st, verb)) store.saveMeta(s.meta) // any click stops multi-turn AutoPlay
         return Engine.withGame(game) {
             val civ = GameOps.civOf(game, seat)
             val mine = isMyTurn(s, seat)
@@ -214,6 +215,7 @@ class Controller(val store: Store) {
                     val ctx = ActionCtx(s, seat, st, game, civ, mine, args, value)
                     if (!Extensions.all.any { it.handle(verb, ctx) }) throw PlayerError("Unknown action.")
                     changed = ctx.changed
+                    if (ctx.endTurn && mine) result = endTurn(s)
                 }
             }
             if (verb in setOf("uact", "step", "goto")) {
@@ -289,7 +291,8 @@ class Controller(val store: Store) {
         var guard = 0
         while (guard++ < 50) {
             val seat = s.meta.seatOfCiv(game.currentPlayerCiv.civID)
-            if (seat == null || !seat.aiControlled) break
+            // (multi-turn AutoPlay: UnitsPlus lets the AI play that human's turn, then it ends here too)
+            if (seat == null || (!seat.aiControlled && !UnitsPlus.autoPlayTurn(s, seat, events))) break
             events += GameOps.endTurn(game, game.currentPlayerCiv)
         }
         val winner = GameOps.winner(game)

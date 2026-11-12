@@ -209,6 +209,7 @@ object GameOps {
         }
         // Own unit of the same kind there: swap places (Unciv: canUnitSwapTo / swapMoveToTile)
         if (allowSwap) UnitsPlus.trySwap(u, target)?.let { return it }
+        val turns = UnitsPlus.turnsTo(u, target) // Unciv's "N turns to get there" (getShortestPath size)
         val step = try { u.movement.getTileToMoveToThisTurn(target) } catch (e: Exception) {
             throw PlayerError("${u.label()} can't find a path there.")
         }
@@ -217,7 +218,7 @@ object GameOps {
         if (u.getTile() == before) throw PlayerError("${u.label()} can't move there.")
         if (u.getTile() != target) {
             u.action = "moveTo ${target.position.x},${target.position.y}"
-            return "${u.label()} is heading there (continues next turn)."
+            return "${u.label()} is heading there (${UnitsPlus.turnsNote(turns)}continues next turn)."
         }
         if (u.isExploring() || u.isMoving()) u.action = null
         return "${u.label()} moved."
@@ -271,7 +272,7 @@ object GameOps {
                 is CityCombatant -> "city ${c.city.name} (${c.getHealth()} HP)"
                 else -> "enemy"
             }
-            out += Choice("atk:${t.tileToAttack.position.x},${t.tileToAttack.position.y}", "Attack $name", "Combat", "⚔️")
+            out += Choice("atk:${t.tileToAttack.position.x},${t.tileToAttack.position.y}", "Attack $name", UnitsPlus.previewShort(u, t) ?: "Combat", "⚔️")
         }
         if (u.promotions.canBePromoted() && u.hasMovement() && u.attacksThisTurn == 0) // Unciv: PromotionPickerScreen.canPromoteNow
             for (p in u.promotions.getAvailablePromotions()) out += Choice("promo:${p.name}", "Promote: ${p.name}", clean(p.uniques.joinToString("; ")).take(100), "⭐")
@@ -288,7 +289,7 @@ object GameOps {
         for (type in engineTypes) {
             val actions = try { UnitActions.getUnitActions(u, type).toList() } catch (e: Exception) { emptyList() }
             actions.forEachIndexed { i, a ->
-                if (a.action != null) out += Choice("act:${type.name}:$i", clean(a.title), type.value, if (type == UnitActionType.FoundCity) "🏙️" else "✨")
+                if (a.action != null) out += Choice("act:${type.name}:$i", clean(a.title), type.value + (if (a.confirmation != null) " · asks to confirm" else ""), if (type == UnitActionType.FoundCity) "🏙️" else "✨")
             }
         }
         try {
@@ -335,7 +336,7 @@ object GameOps {
             out += Choice("ask:roadto", "Connect road to…", "Builds a road to a tile or city, over several turns", "🛣️")
         if (u.hasMovement()) out += Choice("skip", "Skip this turn", "", "⏭️")
         if (u.hasMovement()) out += Choice("disband", "Disband unit…", UnitsPlus.disbandText(u), "🗑️")
-        out.addAll(0, UnitsPlus.pendingDisbandChoices(u))
+        out.addAll(0, UnitsPlus.pendingDisbandChoices(u) + UnitsPlus.pendingConfirmChoices(u))
         return out.sortedBy { if (it.id == "do:cp_undo") 0 else 1 } // ↩️ Undo always first
     }
 
@@ -357,8 +358,9 @@ object GameOps {
             id.startsWith("act:") -> {
                 val (_, typeName, idx) = id.split(":")
                 val type = UnitActionType.valueOf(typeName)
-                val a = UnitActions.getUnitActions(u, type).toList().getOrNull(idx.toInt())?.action
-                    ?: throw PlayerError("That action isn't available any more.")
+                val ua = UnitActions.getUnitActions(u, type).toList().getOrNull(idx.toInt())
+                val a = ua?.action ?: throw PlayerError("That action isn't available any more.")
+                UnitsPlus.confirmFirst(u, ua)?.let { return it } // Unciv's UnitActionConfirmation (pillage, broken promise…)
                 a.invoke()
                 return "✨ $name: ${type.value}."
             }

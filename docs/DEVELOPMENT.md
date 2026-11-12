@@ -45,7 +45,7 @@ Most features beyond the basics live in **extension objects**, one file each, re
 | File | Features |
 |---|---|
 | `CityPlus.kt` | 👥 Citizens, 🏗️ Production (queue editing, buying, details), 🏙️ Cities overview and 🏛️ Wonders tabs, sell, rename, worker queue, ↩️ undo |
-| `UnitsPlus.kt` | swap, group move, destinations, promotion paths and defaults, disband confirm, upgrade all, AutoPlay once, 📰 News tab, end-turn checklist extras |
+| `UnitsPlus.kt` | swap, group move, destinations + turns to get there, promotion paths and defaults, disband confirm, ⚠️ confirm for Unciv's confirmed actions, ⚔️ combat preview, 🚫 unavailable actions, unit info, upgrade all, AutoPlay (once / economy / full turn / N turns, `/civ autoplay`), 🪖 Units overview, 📰 News tab, end-turn checklist extras |
 | `DiplomacyPlus.kt` | war confirmation and peace lock, two-sided treaties, 🧭 Relations tab, player demands, custom deal amounts, city-state details, gifts and marriage |
 | `SetupPlus.kt` | `/civ setup` (all remaining game options), `/civ save export` / `import` |
 | `MilitaryPlus.kt` | 🎖️ Military tab, nukes with blast preview and confirm, air sweep / strike / rebase |
