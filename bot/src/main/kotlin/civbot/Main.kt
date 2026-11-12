@@ -12,7 +12,7 @@ private val log = LoggerFactory.getLogger("civbot")
 private fun loadEnv(file: File): Map<String, String> {
     val out = HashMap<String, String>()
     if (file.isFile) file.readLines().forEach { line ->
-        val l = line.trim()
+        val l = line.removePrefix("\uFEFF").trim() // Windows editors may add a byte-order mark
         if (l.isEmpty() || l.startsWith("#") || !l.contains("=")) return@forEach
         out[l.substringBefore("=").trim()] = l.substringAfter("=").trim().removeSurrounding("\"")
     }
@@ -22,7 +22,8 @@ private fun loadEnv(file: File): Map<String, String> {
 
 fun main(args: Array<String>) {
     val home = File(System.getProperty("civbot.home") ?: "../../..").canonicalFile // run.sh sets this
-    val env = loadEnv(File(home, ".env"))
+    // Windows Notepad likes to save ".env" as ".env.txt": accept either
+    val env = loadEnv(File(home, ".env").takeIf { it.isFile } ?: File(home, ".env.txt"))
     val uncivDir = File(env["UNCIV_DIR"] ?: File(home, "unciv").path)
     val dataDir = File(env["CIVBOT_DATA"] ?: File(home, "data").path)
     Engine.init(uncivDir)

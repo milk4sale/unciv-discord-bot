@@ -11,3 +11,5 @@ bot/build/
 # local test output
 selftest-out/
 *.log
+.env.txt
+unciv-download/
