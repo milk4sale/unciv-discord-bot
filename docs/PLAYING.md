@@ -134,7 +134,7 @@ Switch tabs with the **dropdown at the top** of the panel.
 - **City actions** dropdown:
   - **Buy … for N gold** (and **Buy … with faith** for religious units)
   - **Bombard …:** the city shoots an enemy unit in range
-  - **Focus:** food, production, gold, science, culture, faith or default (citizens re-arrange to match)
+  - **Focus:** food, production, gold, science, culture, faith, default or ✋ manual (citizens re-arrange to match; manual keeps them where you put them)
   - **Buy tile Xn:** the cheapest tiles you can buy, labelled with their map code
   - **Annex** a puppet city, **Raze** a city, **Stop razing**, **Clear the build queue**
   - **💸 Sell …** a building (one per city per turn), **✏️ Rename** the city
@@ -145,10 +145,14 @@ Fine control over who works where, like Unciv's city screen.
 - **Pick a city.** The map shades the tiles it works, and the info card lists citizens, unemployed
   citizens, yields and specialists.
 - **Tile menu:** ⬜ **Work** a tile (it gets locked so the city keeps working it), 🔒 **Lock** /
-  🔓 **Unlock**, or ✖️ **Stop working** (the citizen becomes unemployed).
+  🔓 **Unlock**, or ✖️ **Stop working** (the citizen becomes unemployed). Every tile is listed (the
+  menu has pages). ⌨️ **Work a tile by code…** lets you type a map code instead, and 🧍 **Reassign
+  citizens (keep locks)** lets the governor re-plan everyone who isn't locked (Unciv's click on
+  "Unassigned population").
 - **Specialist menu:** ➕ / ➖ scientists, merchants, engineers and artists in the buildings that have
   slots.
-- **🔄 Reset** returns everything to automatic. **🚫 Avoid growth** stops the city growing.
+- **🔄 Reset** clears every lock and re-plans the city (like Unciv, it keeps your focus and manual
+  specialists). **🚫 Avoid growth** stops the city growing.
   **✋ / 🤖 Specialists** switches between manual and automatic specialists.
 
 ### 🎖️ Military
@@ -300,8 +304,8 @@ your server, even outside a game.
 
 ### More tabs
 
-- **🏗️ Production:** the build queue for a city. Pick an entry, then move it up, down, to the top or to the end, remove it, or buy it with gold, faith or another allowed currency. Add items to the end or the top, in this city or all cities, and disable items you never want. **📈 Details** shows turns to the next border tile, We Love the King Day, resistance, local resources, great-person points, religion pressure, a breakdown of any stat, and why something can't be built.
-- **🏙️ Cities overview / 🏛️ Wonders:** all your cities side by side (sortable), and every wonder in the game: who built it, and which of your cities could.
+- **🏗️ Production:** the build queue for a city. Pick an entry, then move it up, down, to the top or to the end, remove it, or buy it with gold, faith or another allowed currency. Add items to the end or the top, in this city or all cities, and disable items you never want. **📈 Details** shows turns to the next border tile, We Love the King Day, resistance, local resources, great-person points, religion pressure, a breakdown of any stat, and why something can't be built (with the cities still missing a building that all cities need: 🔎 **Show** jumps to it). **🏠 Buildings** lists every building in the city with its yields, upkeep and specialist slots. Buying a building that places an improvement (and isn't queued) asks you for the tile.
+- **🏙️ Cities overview / 🏛️ Wonders:** all your cities side by side, with happiness and garrison (sortable by any column), and every wonder in the game: who built it, and which of your cities could.
 - **🧭 Relations:** why the selected civ likes or dislikes you, promises on both sides, active deals with turns left, and who's at war or allied with whom. **📢 Make a demand** asks an AI to stop settling near you, stop spying, and so on. It answers on its turn.
 - **📊 Stats:** per-source breakdowns of gold, science, culture, faith and happiness, the score breakdown, unit supply, resources by origin, every religion, global politics, demographics, 📈 **charts** of any stat over time, and the full notification log.
 - **🎞️ Replay:** step through the world map turn by turn (from turn 5).
@@ -313,6 +317,8 @@ your server, even outside a game.
 
 Made a mistake? **↩️ Undo last action** is the first entry in the Unit actions and City actions
 menus. It goes back up to 10 steps within your current turn. Once you end the turn, there's no undo.
+Like in Unciv, a fight (attack, bombard, nuke, air sweep) or newly explored tiles clear the undo
+history: the menu then says **Undo not available after combat or exploring**.
 
 ## Auto-pick and ending your turn
 
@@ -327,14 +333,17 @@ menus. It goes back up to 10 steps within your current turn. Once you end the tu
 
 ## Captured cities
 
-When you capture a city, Unciv first applies its default (usually puppet, or annex for your
-old capital). The panel then asks what you want:
+When you capture a city, Unciv first applies its default (usually puppet; your old capital is
+re-annexed at once). The city always stays yours until you decide, even when Unciv's AI would have
+handed it back to a city-state. The panel then asks what you want (also for your own cities you
+take back):
 
 - **Keep it as is**
 - **Annex** (full control, more unhappiness)
+- **Puppet** (no control over production; also turns an annexed or burning city back into a puppet)
 - **Raze** (burn it down over several turns)
-- **Spare it** (stop razing)
-- **Liberate** (give it back to its founder for a big relationship boost)
+- **Liberate** (give it back to its founder for a big relationship boost — even a civilization or
+  city-state that was wiped out, which comes back to life)
 
 ## Tips
 

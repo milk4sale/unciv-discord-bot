@@ -252,7 +252,7 @@ object GameOps {
         }
         val defHpBefore = defender?.getHealth() ?: 0
         val hpBefore = u.health
-        Battle.moveAndAttack(MapUnitCombatant(u), target)
+        CityPlus.attackKeepingCaptureChoice(u, target) { Battle.moveAndAttack(MapUnitCombatant(u), target) }
         val dealt = defHpBefore - (defender?.getHealth() ?: 0)
         val taken = hpBefore - u.health
         return buildString {
@@ -492,8 +492,10 @@ object GameOps {
             val cost = c.getStatBuyCost(city, stat) ?: continue
             if (!cc.isConstructionPurchaseAllowed(c, stat, cost)) continue
             val where = when (idx) { -1 -> ""; 0 -> " (building now)"; else -> " (queued #${idx + 1})" }
-            val ch = Choice("$prefix${stat.name}~$idx~${c.name}", "Buy ${c.name}$where", "$cost ${stat.name.lowercase()}" +
-                (if (c is Building && c.hasCreateOneImprovementUnique()) " · places its improvement" else ""), emoji[stat])
+            // Unciv's BuyButtonFactory: a "creates one improvement" building that isn't queued asks for its tile first
+            val pickTile = idx < 0 && c is Building && c.getImprovementToCreate(rs, city.civ) != null
+            val ch = Choice(if (pickTile) "ask:cp_buyimp:${stat.name}~${c.name}" else "$prefix${stat.name}~$idx~${c.name}", "Buy ${c.name}$where", "$cost ${stat.name.lowercase()}" +
+                (if (pickTile) " · you choose the improvement's tile" else if (c is Building && c.hasCreateOneImprovementUnique()) " · places its improvement" else ""), emoji[stat])
             if (idx >= 0) first += ch else rest += cost to ch
         }
         return first + rest.sortedBy { it.first }.map { it.second }
@@ -549,38 +551,10 @@ object GameOps {
         else -> "annexed"
     }
 
-    fun conquestChoices(civ: Civilization, city: City): List<Choice> {
-        val out = ArrayList<Choice>()
-        val founder = city.foundingCivObject
-        val occ = civ.isOneCityChallenger()
-        if (!occ) out += Choice("keep", "Keep it as is (${conquestStatus(city)})", "", "👍")
-        if (founder != null && founder != civ && founder.isAlive()) out += Choice("liberate", "Liberate (return to ${founder.civName})", "Big relationship boost", "🕊️")
-        if (occ) { out += Choice("destroy", "Destroy", "One-City Challenge: the city is razed to the ground at once", "💥"); return out }
-        val mayAnnex = mayAnnex(civ)
-        if (city.isPuppet && mayAnnex) out += Choice("annex", "Annex", "Part of your empire (more unhappiness)", "🏙️")
-        if (!city.isBeingRazed && city.canBeDestroyed(justCaptured = true))
-            out += Choice("raze", "Raze", if (mayAnnex) "Annexes it and burns it down over time" else "Stays a puppet and burns down over time", "🔥")
-        if (city.isBeingRazed) out += Choice("spare", "Spare it (stop razing)", "Keep the city", "🧯")
-        return out
-    }
+    /** Unciv's AlertPopup.addCityConquered options (see [CityPlus.conquestChoices]). */
+    fun conquestChoices(civ: Civilization, city: City): List<Choice> = CityPlus.conquestChoices(civ, city)
 
-    fun resolveConquest(civ: Civilization, city: City, choice: String): String {
-        civ.popupAlerts.removeAll { it.type == AlertType.CityConquered && it.value == city.id }
-        return when (choice) {
-            "liberate" -> { city.liberateCity(civ); "🕊️ ${city.name} liberated." }
-            "annex" -> { requireMayAnnex(civ); if (city.isPuppet) city.annexCity(); "🏙️ ${city.name} annexed." }
-            "raze" -> {
-                if (!city.canBeDestroyed(justCaptured = true)) throw PlayerError("Original capitals and holy cities can't be razed.")
-                if (city.isPuppet && mayAnnex(civ)) city.annexCity(); city.isBeingRazed = true; "🔥 ${city.name} is being razed."
-            }
-            "spare" -> { city.isBeingRazed = false; "🧯 ${city.name} will be spared." }
-            else -> if (civ.isOneCityChallenger()) {
-                // Unciv: a one-city challenger can only liberate or destroy (Battle destroys with overrideSafeties)
-                if (city.civ != civ) city.puppetCity(civ)
-                val name = city.name; city.destroyCity(overrideSafeties = true); "💥 $name was destroyed."
-            } else "👍 ${city.name} stays ${conquestStatus(city)}."
-        }
-    }
+    fun resolveConquest(civ: Civilization, city: City, choice: String): String = CityPlus.resolveConquest(civ, city, choice)
 
     // ------------------------------------------------------------------ tech & policies
 
@@ -759,7 +733,7 @@ object GameOps {
     fun autoResolveConquests(civ: Civilization) {
         while (true) {
             val city = pendingConquest(civ) ?: break
-            resolveConquest(civ, city, "puppet")
+            resolveConquest(civ, city, "keep") // keep what Unciv's automation already did
         }
     }
 

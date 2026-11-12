@@ -21,6 +21,14 @@ import com.unciv.models.ruleset.RejectionReason
 import com.unciv.models.ruleset.unique.UniqueType
 import com.unciv.models.ruleset.unit.BaseUnit
 import com.unciv.view.GameView
+import com.unciv.logic.battle.AttackableTile
+import com.unciv.logic.city.managers.CityConquestFunctions
+import com.unciv.logic.civilization.AlertType
+import com.unciv.logic.civilization.NotificationCategory
+import com.unciv.logic.civilization.NotificationIcon
+import com.unciv.logic.civilization.PopupAlert
+import com.unciv.logic.civilization.diplomacy.DiplomaticModifiers
+import com.unciv.models.ruleset.RejectionReasonType
 import net.dv8tion.jda.api.interactions.components.ActionRow
 import kotlin.math.ceil
 
@@ -36,9 +44,11 @@ import kotlin.math.ceil
  *    stat breakdown, why things can't be built)
  *  - Buy a tile by code / a whole ring of tiles (city actions)
  *  - 🏙️ Cities overview and 🏛️ Wonders tabs
+ *  - 🏰 Captured cities (AlertPopup.addCityConquered): liberate (also to a defeated civ), annex, puppet, raze —
+ *    the capture decision is kept for the player instead of Unciv's headless automateCityConquer
  */
 object CityPlus : Extension {
-    override val viewVerbs = setOf("cp_city", "cp_pcity", "cp_pview", "cp_psel", "cp_stat", "cp_cant", "cp_ovpage", "cp_ovsort", "cp_ovcity", "cp_won")
+    override val viewVerbs = setOf("cp_city", "cp_pcity", "cp_pview", "cp_psel", "cp_stat", "cp_cant", "cp_ovpage", "cp_ovsort", "cp_ovcity", "cp_won", "cp_bsel")
 
     private const val TAB = "CITIZENS"
     private const val MAX_UNDO = 10
@@ -60,6 +70,8 @@ object CityPlus : Extension {
         "cp_buytile" to Prompt("Buy a tile", "Tile code from the map", "e.g. D5"),
         "cp_rename_city" to Prompt("Rename city", "New city name", "e.g. Nova Roma"),
         "cp_rename_unit" to Prompt("Rename unit", "New unit name", "Type the unit type (e.g. Warrior) to reset"),
+        "cp_worktile" to Prompt("Work a tile", "Tile code (one of the city's tiles)", "e.g. D5 — an unemployed citizen works it, locked"),
+        "cp_buyimp" to Prompt("Buy — place the improvement", "Tile code (one of the city's own tiles)", "e.g. D5"),
     )
 
     // ================================================================ helpers
@@ -116,6 +128,10 @@ object CityPlus : Extension {
         val civ = city.civ
         val free = city.population.getFreePopulation()
         val out = ArrayList<Choice>()
+        // CityStatsTable's "Unassigned population" click: re-plan without touching locks or manual specialists
+        out += Choice("do:cp_reassign", "Reassign citizens (keep locks)" + (if (free > 0) " — $free unemployed" else ""),
+            "The governor re-plans unlocked citizens; locked tiles and manual specialists stay", "🧍")
+        out += Choice("ask:cp_worktile", "Work a tile by code…", "Type a tile code from the map (an unemployed citizen works it, locked)", "⌨️")
         for (t in city.getWorkedTiles().sortedBy { code(st, it) }) {
             val c = code(st, t); val y = yields(tileStats(city, t)); val d = terrain(t, civ)
             val xy = "${t.position.x},${t.position.y}"
@@ -130,7 +146,7 @@ object CityPlus : Extension {
             out += Choice("w:${t.position.x},${t.position.y}", "Work ${code(st, t)} — ${yields(s)}",
                 (if (free > 0) "Assign an unemployed citizen (locked) · " else "No unemployed citizen — free one first · ") + terrain(t, civ), "⬜")
         }
-        return out.take(25)
+        return out // the panel pages long dropdowns itself
     }
 
     private fun specialistSources(city: City, name: String) =
@@ -152,7 +168,7 @@ object CityPlus : Extension {
                 (if (free > 0) "" else "Needs an unemployed citizen · ") + specialistStats(city, name), "➕")
             if (n > 0) out += Choice("-:$name", "Remove $name ($n/$max)", "The citizen becomes unemployed", "➖")
         }
-        return out.take(25)
+        return out
     }
 
     override fun renderTab(tabId: String, t: TabCtx) {
@@ -222,15 +238,21 @@ object CityPlus : Extension {
             if (city.manualSpecialists) "✋" else "🤖", if (city.manualSpecialists) 1 else 2, canEdit)
     }
 
-    private fun doTile(ctx: ActionCtx): String {
+    private fun doTile(ctx: ActionCtx, value: String? = ctx.value): String {
         ctx.requireTurn()
         val city = cityOf(ctx)
-        val v = ctx.value ?: throw PlayerError("Pick a tile.")
+        val v = value ?: throw PlayerError("Pick a tile.")
         val tile = tileFrom(ctx.game, v)
         val c = code(ctx.st, tile)
         val msg = when (v.substringBefore(":")) {
             "w" -> {
-                if (!workable(city, tile)) throw PlayerError("${city.name} can't work $c.")
+                if (!workable(city, tile)) throw PlayerError(when {
+                    tile == city.getCenterTile() -> "$c is the city centre — it's always worked."
+                    tile !in city.tilesInRange || tile.getOwner() != city.civ -> "$c isn't one of ${city.name}'s tiles."
+                    tile.getWorkingCity()?.let { it != city } == true -> "$c is worked by ${tile.getWorkingCity()!!.name}."
+                    tile.isBlockaded() -> "$c is blockaded by an enemy unit."
+                    else -> "${city.name} can't work $c."
+                })
                 if (!city.isWorked(tile)) {
                     if (city.population.getFreePopulation() <= 0)
                         throw PlayerError("${city.name} has no unemployed citizen. Stop working a tile or remove a specialist first.")
@@ -421,21 +443,44 @@ object CityPlus : Extension {
 
     // ================================================================ undo
 
-    private class Snap(val data: String, val what: String)
-    private class UndoStack(val civId: String, val turn: Int) { val snaps = ArrayDeque<Snap>() }
+    private class Snap(val data: String, val what: String, val combat: Int, val explored: Int)
+    private class UndoStack(val civId: String, val turn: Int) {
+        val snaps = ArrayDeque<Snap>()
+        /** Undo was wiped this turn because of combat or exploring (Unciv's clearUndoCheckpoints) */
+        var blocked = false
+    }
+    private const val UNDO_BLOCKED = "↩️ Undo not available after combat or exploring"
+
+    /** Attacks made this turn: unit attacks (incl. nukes, kept by the civ when the unit dies), air sweeps, city bombards. */
+    private fun combatCount(civ: Civilization): Int =
+        civ.attacksSinceTurnStart.size + civ.units.getCivUnits().sumOf { it.attacksSinceTurnStart.size + it.attacksThisTurn } +
+            civ.cities.count { it.attackedThisTurn }
+    private fun exploredCount(civ: Civilization): Int = civ.gameInfo.tileMap.values.count { it.isExplored(civ) }
+
+    /** Like Unciv (BattleTable.clearUndoCheckpoints after an attack, Tile.setExplored on a new tile): once the player
+     *  fought or revealed new tiles since the last snapshot, nothing before that can be undone. */
+    private fun dropIfCombatOrExplored(stack: UndoStack, civ: Civilization) {
+        val top = stack.snaps.lastOrNull() ?: return
+        if (combatCount(civ) > top.combat || exploredCount(civ) > top.explored) { stack.snaps.clear(); stack.blocked = true }
+    }
     /** Per game (GameInfo.gameId survives save/load and undo) */
     private val stacks = HashMap<String, UndoStack>()
     /** Panel states we've seen, to describe what's being snapshotted */
     private val seen = HashMap<String, PanelState>()
     private fun remember(s: Session, seat: Seat, st: PanelState) { seen["${s.meta.id}:${seat.userId}"] = st }
 
-    private fun validStack(game: GameInfo, civ: Civilization): UndoStack? {
+    /** This turn's stack of [civ], whether or not it still has entries. */
+    private fun turnStack(game: GameInfo, civ: Civilization): UndoStack? {
         val st = stacks[game.gameId] ?: return null
-        return st.takeIf { it.civId == civ.civID && game.currentPlayerCiv.civID == civ.civID && it.turn == game.turns && it.snaps.isNotEmpty() }
+        return st.takeIf { it.civId == civ.civID && game.currentPlayerCiv.civID == civ.civID && it.turn == game.turns }
+            ?.also { dropIfCombatOrExplored(it, civ) }
     }
 
+    private fun validStack(game: GameInfo, civ: Civilization): UndoStack? = turnStack(game, civ)?.takeIf { it.snaps.isNotEmpty() }
+
     private fun undoChoice(civ: Civilization): Choice? {
-        val st = validStack(civ.gameInfo, civ) ?: return null
+        val st = turnStack(civ.gameInfo, civ) ?: return null
+        if (st.snaps.isEmpty()) return if (st.blocked) Choice("do:cp_undo", UNDO_BLOCKED.removePrefix("↩️ "), "Like Unciv: fights and newly explored tiles can't be taken back", "↩️") else null
         return Choice("do:cp_undo", "Undo last action", "Reverts: ${st.snaps.last().what}".take(100), "↩️")
     }
 
@@ -472,6 +517,9 @@ object CityPlus : Extension {
             "cp_pact" -> "production queue change$city"
             "cp_imptile" -> "improvement tile choice$city"
             "cp_buytile" -> "tile purchase$city"
+            "cp_reassign" -> "citizen re-plan$city"
+            "cp_worktile" -> "tile assignment$city"
+            "cp_buyimp" -> "purchase$city"
             else -> verb
         }
     }
@@ -486,11 +534,12 @@ object CityPlus : Extension {
             if (stack == null || stack.civId != cur.civID || stack.turn != g.turns) {
                 stack = UndoStack(cur.civID, g.turns); stacks[g.gameId] = stack
             }
+            dropIfCombatOrExplored(stack, cur)
             val data = Engine.serialize(g)
             val what = describe(verb, cur, seen["${s.meta.id}:${seat.userId}"])
             // The previous action changed nothing (e.g. it failed or only changed the view): replace its snapshot
             if (stack.snaps.lastOrNull()?.data == data) stack.snaps.removeLast()
-            stack.snaps.addLast(Snap(data, what))
+            stack.snaps.addLast(Snap(data, what, combatCount(cur), exploredCount(cur)))
             while (stack.snaps.size > MAX_UNDO) stack.snaps.removeFirst()
         }
     }
@@ -499,7 +548,12 @@ object CityPlus : Extension {
 
     private fun undo(ctx: ActionCtx) {
         ctx.requireTurn()
-        val stack = validStack(ctx.game, ctx.civ) ?: throw PlayerError("Nothing to undo this turn.")
+        val stack = validStack(ctx.game, ctx.civ)
+        if (stack == null) {
+            if (turnStack(ctx.game, ctx.civ)?.blocked != true) throw PlayerError("Nothing to undo this turn.")
+            ctx.flash += "$UNDO_BLOCKED — like in Unciv, fights and newly explored tiles can't be taken back."
+            return
+        }
         val now = Engine.serialize(ctx.game)
         while (stack.snaps.isNotEmpty() && stack.snaps.last().data == now) stack.snaps.removeLast() // no-op entries
         val snap = stack.snaps.removeLastOrNull() ?: throw PlayerError("Nothing to undo this turn.")
@@ -599,8 +653,45 @@ object CityPlus : Extension {
             if (!c.canBePurchasedWithStat(city, stat)) return@mapNotNull null
             val cost = c.getStatBuyCost(city, stat) ?: return@mapNotNull null
             if (!city.cityConstructions.isConstructionPurchaseAllowed(c, stat, cost)) return@mapNotNull null
-            Choice("buy:${stat.name}~$idx~${c.name}", "Buy for $cost ${stat.name.lowercase()}" + (if (idx >= 0) " (queue #${idx + 1})" else ""),
+            // BuyButtonFactory: a "creates one improvement" building bought outside the queue asks for its tile
+            if (idx < 0 && createsOne(city, c) != null)
+                Choice("ask:cp_buyimp:${stat.name}~${c.name}", "Buy for $cost ${stat.name.lowercase()} — choose the improvement's tile…",
+                    "You have ${city.getStatReserve(stat)} ${stat.name.lowercase()} · type a tile code from the map", buyEmoji[stat])
+            else Choice("buy:${stat.name}~$idx~${c.name}", "Buy for $cost ${stat.name.lowercase()}" + (if (idx >= 0) " (queue #${idx + 1})" else ""),
                 "You have ${city.getStatReserve(stat)} ${stat.name.lowercase()}", buyEmoji[stat])
+        }
+
+    /** Buy a "creates one improvement" building that isn't queued, on the tile the player typed. */
+    private fun buyWithTile(ctx: ActionCtx): String {
+        ctx.requireTurn()
+        val city = ctx.selectedCity()
+        val (statName, name) = ctx.args.firstOrNull()?.split("~", limit = 2)?.takeIf { it.size == 2 } ?: throw PlayerError("Pick what to buy first.")
+        val stat = Stat.safeValueOf(statName) ?: throw PlayerError("Unknown currency.")
+        val b = city.getRuleset().buildings[name] ?: throw PlayerError("$name isn't a building.")
+        val imp = createsOne(city, b) ?: throw PlayerError("$name doesn't place an improvement.")
+        val tile = ctx.tile(ctx.value?.trim().orEmpty().ifEmpty { throw PlayerError("Type a tile code, like D5.") })
+        val c = code(ctx.st, tile)
+        val cc = city.cityConstructions
+        if (!cc.canPlaceCreateOneImprovementOn(imp, tile))
+            throw PlayerError("A ${imp.name} can't be placed on $c — pick one of ${city.name}'s own tiles where it can be built.")
+        val cost = b.getStatBuyCost(city, stat) ?: throw PlayerError("$name can't be bought with ${stat.name.lowercase()}.")
+        if (!b.canBePurchasedWithStat(city, stat) || !cc.isConstructionPurchaseAllowed(b, stat, cost))
+            throw PlayerError("You can't buy $name in ${city.name} with ${stat.name.lowercase()} right now ($cost needed, you have ${city.getStatReserve(stat)}).")
+        // Unciv buys it outside the queue (selectedQueueEntry = -1) with the picked tile
+        if (!cc.purchaseConstruction(b, -1, false, stat, tile)) throw PlayerError("Couldn't buy $name.")
+        return "${buyEmoji[stat] ?: "💰"} Bought **$name** in ${city.name} for $cost ${stat.name.lowercase()} — its ${imp.name} is on **$c**."
+    }
+
+    /** ConstructionInfoTable.tryAddShowMissingCities: cities still missing a building that "all cities" need. */
+    private fun missingCities(city: City, c: INonPerpetualConstruction): List<Pair<String, List<City>>> =
+        c.getRejectionReasons(city.cityConstructions).filter { it.type == RejectionReasonType.RequiresBuildingInAllCities }
+            .mapNotNull { r -> (r.extraData as? RejectionReason.RequiresBuildingInAllCitiesExtraData)?.let { it.required to it.cities } }
+            .filter { it.second.isNotEmpty() }.toList()
+
+    private fun missingLines(city: City, c: INonPerpetualConstruction, st: PanelState?): List<String> =
+        missingCities(city, c).map { (req, cs) ->
+            "🏙️ ${if (cs.size == 1) "1 city needs" else "${cs.size} cities need"} a **$req** first: " +
+                cs.joinToString { "${it.name} (${code(st, it.getCenterTile())})" }
         }
 
     private fun actionChoices(city: City, sel: Sel?): List<Choice> {
@@ -627,6 +718,10 @@ object CityPlus : Extension {
             else if (!perpetual) out += Choice("addtop", "Add to the top of the queue", "Builds it next", "🔝")
         }
         if (c is INonPerpetualConstruction) out += buyOptions(city, c, sel.idx)
+        if (c is INonPerpetualConstruction) for ((req, cs) in missingCities(city, c)) {
+            if (cs.size == 1) out += Choice("show:${cs[0].id}", "Show ${cs[0].name}", "It still needs a $req", "🔎")
+            else out += Choice("showall:$req", "Show cities missing requirements", "${cs.size} cities need a $req", "🔎")
+        }
         if (canEdit) {
             if (allCitiesValid(civ, c) { val qq = it.cityConstructions.constructionQueue
                     it.cityConstructions.canAddToQueue(c, qq) && !createOne && !(perpetual && sel.name in qq) })
@@ -672,6 +767,7 @@ object CityPlus : Extension {
             lines += "Buy: " + prices.joinToString(" · ").ifEmpty { "can't be bought" } +
                 (if (cc.isConstructionPurchaseBlockedByUnit(c)) " — move the unit out of the city first" else "")
             if (!c.isBuildable(cc) && sel.name !in cc.constructionQueue) mainRejection(city, c)?.let { lines += "🚫 " + GameOps.clean(it.errorMessage) }
+            lines += missingLines(city, c, st)
         }
         createsOne(city, c)?.let { imp ->
             val t = cc.getTileForImprovement(imp.name)
@@ -690,9 +786,10 @@ object CityPlus : Extension {
             t.eb.addField("🏗️ Production", "No cities yet — found one with a Settler in ⚔️ Units.", false)
             t.mapAround(GameOps.focusTile(civ)); return
         }
-        val details = st.ext["cp_details"] == true
+        val v = view(st)
         val cities = GameOps.citiesOf(civ)
-        if (details) renderDetails(t, city)
+        if (v == "details") renderDetails(t, city)
+        else if (v == "buildings") renderBuildings(t, city)
         else {
             val cc = city.cityConstructions
             val sel = selection(st, city)
@@ -719,7 +816,66 @@ object CityPlus : Extension {
         }
         t.endRow += t.button("cp_pcity", "Prev city", "◀️", 2, cities.size > 1, "-1")
         t.endRow += t.button("cp_pcity", "Next city", "▶️", 2, cities.size > 1, "1")
-        t.endRow += t.button("cp_pview", if (details) "Queue" else "Details", if (details) "🏗️" else "📈", 1)
+        // Queue → 📈 Details → 🏠 Buildings → Queue
+        when (v) {
+            "details" -> t.endRow += t.button("cp_pview", "Buildings", "🏠", 1, true, "buildings")
+            "buildings" -> t.endRow += t.button("cp_pview", "Queue", "🏗️", 1, true, "queue")
+            else -> t.endRow += t.button("cp_pview", "Details", "📈", 1, true, "details")
+        }
+    }
+
+    private val VIEWS = listOf("queue", "details", "buildings")
+    private fun view(st: PanelState) = (st.ext["cp_view"] as? String)?.takeIf { it in VIEWS } ?: "queue"
+
+    // ================================================================ 🏠 Built buildings (CityStatsTable.addBuildingsInfo)
+
+    private fun buildingLine(city: City, b: Building): String {
+        val free = city.civ.civConstructions.hasFreeBuilding(city, b)
+        val parts = ArrayList<String>()
+        parts += yields(b.getStats(city))
+        if (b.maintenance > 0 && !free) parts += "💸 ${b.maintenance} upkeep"
+        val specs = b.newSpecialists().asSequence().filter { it.key in city.getRuleset().specialists }.joinToString { "${it.value} ${it.key}" }
+        if (specs.isNotEmpty()) parts += "🎓 $specs"
+        return "**${b.name}**" + (if (free) " (free)" else "") + " — " + parts.joinToString(" · ")
+    }
+
+    /** Unciv's three groups: wonders, specialist buildings, other buildings — each alphabetical. */
+    private fun builtGroups(city: City): List<Pair<String, List<Building>>> {
+        val all = city.cityConstructions.getBuiltBuildings().sortedBy { it.name }.toList()
+        val wonders = all.filter { it.isAnyWonder() }
+        val specialist = all.filter { !it.isAnyWonder() && it.newSpecialists().isNotEmpty() }
+        val other = all.filter { !it.isAnyWonder() && it.newSpecialists().isEmpty() }
+        return listOf("🎓 Specialist buildings" to specialist, "🏛️ Wonders" to wonders, "🏠 Buildings" to other)
+    }
+
+    private fun buildingDetails(city: City, b: Building): String {
+        val lines = ArrayList<String>()
+        lines += buildingLine(city, b).substringAfter(" — ")
+        if (b.isAnyWonder()) lines += if (b.isWonder) "World wonder" else "National wonder"
+        val uniques = b.uniques.filter { !it.contains("hidden from users", true) }.joinToString("; ") { GameOps.clean(it) }
+        if (uniques.isNotEmpty()) lines += uniques.take(400)
+        if (b.isSellable() && !city.civ.civConstructions.hasFreeBuilding(city, b))
+            lines += "💸 Sells for ${city.getGoldForSellingBuilding(b.name)} gold (City actions" + (if (city.hasSoldBuildingThisTurn) " — already sold one this turn)" else ")")
+        return joinCapped(lines, 700)
+    }
+
+    private fun renderBuildings(t: TabCtx, city: City) {
+        t.mapAround(city.getCenterTile(), Overlay(selectedTile = city.getCenterTile()))
+        val groups = builtGroups(city)
+        val all = groups.flatMap { it.second }
+        val upkeep = all.filter { !city.civ.civConstructions.hasFreeBuilding(city, it) }.sumOf { it.maintenance }
+        t.eb.addField("🏠 ${city.name} — ${all.size} buildings · 💸 $upkeep gold upkeep per turn", if (all.isEmpty()) "Nothing built yet." else
+            "Yields are each building's own stats in this city (like Unciv's city screen).", false)
+        for ((title, bs) in groups) if (bs.isNotEmpty())
+            t.eb.addField("$title (${bs.size})", joinCapped(bs.map { buildingLine(city, it) }, 1000), false)
+        val selName = t.st.ext["cp_bsel"] as? String
+        all.firstOrNull { it.name == selName }?.let { t.eb.addField("🔎 ${it.name}", buildingDetails(city, it), false) }
+        val cities = GameOps.citiesOf(t.civ)
+        t.rows += ActionRow.of(t.select("cp_city", "Select a city (${cities.size})",
+            cities.map { c -> Choice("city:${c.id}", c.name, "${c.cityConstructions.getBuiltBuildings().count()} buildings", if (c.isCapital()) "⭐" else "🏙️") }, "city:${city.id}", true, "b"))
+        t.rows += ActionRow.of(t.select("cp_bsel", "Look at a building (${all.size})…", all.map { b ->
+            Choice("b:${b.name}", b.name, buildingLine(city, b).substringAfter(" — ").take(100), kindEmoji(b))
+        }, selName?.let { "b:$it" }))
     }
 
     private fun doProductionAction(ctx: ActionCtx): String {
@@ -728,6 +884,16 @@ object CityPlus : Extension {
         val v = ctx.value ?: throw PlayerError("Pick an action.")
         val sel = selection(ctx.st, city) ?: throw PlayerError("Pick a queue entry or construction first.")
         if (v.startsWith("buy:")) { val m = GameOps.buy(city, v.removePrefix("buy:")); select(ctx.st, city, null); return m }
+        if (v.startsWith("show")) {
+            val c = GameOps.construction(city, sel.name) as? INonPerpetualConstruction ?: throw PlayerError("Nothing to show.")
+            val missing = missingCities(city, c)
+            if (v.startsWith("show:")) {
+                val other = missing.flatMap { it.second }.firstOrNull { it.id == v.removePrefix("show:") } ?: throw PlayerError("That city doesn't block ${sel.name} any more.")
+                ctx.st.cityId = other.id
+                return "🔎 ${other.name} still needs a **${missing.first { other in it.second }.first}** before ${city.name} can build ${sel.name}."
+            }
+            return missingLines(city, c, ctx.st).ifEmpty { throw PlayerError("No city blocks ${sel.name} any more.") }.joinToString("\n")
+        }
         if (city.isPuppet) throw PlayerError("${city.name} is a puppet — it chooses its own production. Annex it first.")
         val valid = actionChoices(city, sel).map { it.id }
         if (v !in valid) throw PlayerError("That isn't possible for ${sel.name} any more.")
@@ -966,15 +1132,26 @@ object CityPlus : Extension {
 
     private const val OV_PAGE = 8
     private val sorts = linkedMapOf(
-        "default" to "Capital first", "name" to "Name", "pop" to "Population", "prod" to "Production",
-        "gold" to "Gold", "sci" to "Science", "cult" to "Culture", "def" to "Defence",
+        "default" to "Capital first", "name" to "Name", "pop" to "Population", "food" to "Food", "prod" to "Production",
+        "gold" to "Gold", "sci" to "Science", "cult" to "Culture", "happy" to "Happiness", "faith" to "Faith",
+        "garrison" to "Garrison", "def" to "Defence",
     )
+
+    /** Unciv's CityOverviewTabColumn.Happiness: the city's local happiness sources. */
+    private fun happiness(c: City) = c.cityStats.happinessList.values.sum()
+
+    /** Sorts like Unciv's city overview (Faith only when religion is on). */
+    private fun sortOptions(civ: Civilization) = sorts.filterKeys { it != "faith" || civ.gameInfo.isReligionEnabled() }
 
     private fun sortedCities(civ: Civilization, sort: String): List<City> {
         val s = { c: City -> c.cityStats.currentCityStats }
         return when (sort) {
             "name" -> civ.cities.sortedBy { it.name }
             "pop" -> civ.cities.sortedByDescending { it.population.population }
+            "food" -> civ.cities.sortedByDescending { s(it).food }
+            "happy" -> civ.cities.sortedByDescending { happiness(it) }
+            "faith" -> civ.cities.sortedByDescending { s(it).faith }
+            "garrison" -> civ.cities.sortedWith(compareBy<City> { it.getGarrison() == null }.thenBy { it.getGarrison()?.label() ?: "" })
             "prod" -> civ.cities.sortedByDescending { s(it).production }
             "gold" -> civ.cities.sortedByDescending { s(it).gold }
             "sci" -> civ.cities.sortedByDescending { s(it).science }
@@ -988,9 +1165,11 @@ object CityPlus : Extension {
         val s = c.cityStats.currentCityStats
         val cur = c.cityConstructions.currentConstructionName()
         val parts = ArrayList<String>()
-        parts += "🍞${signed(s.food)} ⚙️${num(s.production)} 💰${signed(s.gold)} 🔬${num(s.science)} 🎭${num(s.culture)} 🙏${num(s.faith)}"
+        parts += "🍞${signed(s.food)} ⚙️${num(s.production)} 💰${signed(s.gold)} 🔬${num(s.science)} 🎭${num(s.culture)} 😊${signed(happiness(c))}" +
+            (if (c.civ.gameInfo.isReligionEnabled()) " 🙏${num(s.faith)}" else "")
         parts += "🏗️ " + (if (cur.isEmpty()) "idle" else if (PerpetualConstruction.isNamePerpetual(cur)) cur else "$cur (${c.cityConstructions.turnsToConstruction(cur)}t)")
-        parts += "🛡️ ${c.getStrength().toInt()} · ❤️ ${c.health}/${cityView(c).getMaxHealth()}"
+        parts += "🛡️ ${c.getStrength().toInt()} · ❤️ ${c.health}/${cityView(c).getMaxHealth()} · " +
+            (c.getGarrison()?.let { "🪖 garrison: ${it.label()}" } ?: "🪖 no garrison")
         c.religion.getMajorityReligion()?.let { parts += "⛪ ${it.getReligionDisplayName()}" }
         when {
             c.isWeLoveTheKingDayActive() -> parts += "🎉 WLTK ${c.getFlag(CityFlags.WeLoveTheKing)}t"
@@ -1009,7 +1188,9 @@ object CityPlus : Extension {
         t.st.ext["cp_ovpage"] = page
         val tot = cities.fold(Stats()) { acc, c -> acc.apply { add(c.cityStats.currentCityStats) } }
         t.eb.addField("🏙️ ${cities.size} cities · ${cities.sumOf { it.population.population }} citizens" + (if (pages > 1) " · page ${page + 1}/$pages" else ""),
-            if (cities.isEmpty()) "No cities yet." else "Total: 🍞${signed(tot.food)} ⚙️${num(tot.production)} 💰${signed(tot.gold)} 🔬${num(tot.science)} 🎭${num(tot.culture)} 🙏${num(tot.faith)}" +
+            if (cities.isEmpty()) "No cities yet." else "Total: 🍞${signed(tot.food)} ⚙️${num(tot.production)} 💰${signed(tot.gold)} 🔬${num(tot.science)} 🎭${num(tot.culture)}" +
+                " 😊${signed(cities.sumOf { happiness(it).toDouble() }.toFloat())}" + (if (civ.gameInfo.isReligionEnabled()) " 🙏${num(tot.faith)}" else "") +
+                " · 🪖 ${cities.count { it.getGarrison() != null }}/${cities.size} garrisoned" +
                 " · sorted by ${sorts[sort]?.lowercase()}", false)
         for (c in cities.drop(page * OV_PAGE).take(OV_PAGE)) {
             val tags = listOfNotNull("puppet".takeIf { c.isPuppet }, "🔥 razing".takeIf { c.isBeingRazed })
@@ -1019,7 +1200,7 @@ object CityPlus : Extension {
         t.rows += ActionRow.of(t.select("cp_ovcity", "Open a city in 🏗️ Production…", cities.map { c ->
             Choice("city:${c.id}", c.name, "pop ${c.population.population} · ⚙️${num(c.cityStats.currentCityStats.production)} · ${c.cityConstructions.currentConstructionName().ifEmpty { "idle" }}", if (c.isCapital()) "⭐" else "🏙️")
         }))
-        t.rows += ActionRow.of(t.select("cp_ovsort", "Sort by…", sorts.map { (k, v) -> Choice("sort:$k", v, "", "↕️") }, "sort:$sort"))
+        t.rows += ActionRow.of(t.select("cp_ovsort", "Sort by…", sortOptions(civ).map { (k, v) -> Choice("sort:$k", v, "", "↕️") }, "sort:$sort"))
         t.endRow += t.button("cp_ovpage", "Previous", "◀️", 2, page > 0, "-1")
         t.endRow += t.button("cp_ovpage", "Next", "▶️", 2, page < pages - 1, "1")
         t.includeAdvisor = false
@@ -1127,6 +1308,156 @@ object CityPlus : Extension {
         t.worldMap()
     }
 
+    // ================================================================ 🏰 captured cities (Battle.conquerCity, AlertPopup.addCityConquered)
+
+    /** Diplomatic modifiers that only puppeting/annexing/razing causes (CityConquestFunctions.diplomaticRepercussionsForConqueringCity). */
+    private val captureModifiers = listOf(DiplomaticModifiers.CapturedOurCities, DiplomaticModifiers.WarMongerer, DiplomaticModifiers.SharedEnemy).map { it.name }
+    /** Before-capture diplomacy of every civ toward the conqueror, per "<gameId>:<cityId>" (in memory, this turn only). */
+    private class PreCapture(val turn: Int, val modifiers: Map<String, Map<String, Float>>)
+    private val preCapture = HashMap<String, PreCapture>()
+
+    private fun modifiersToward(game: GameInfo, civ: Civilization): Map<String, Map<String, Float>> =
+        game.civilizations.filter { it != civ }.mapNotNull { o ->
+            o.getDiplomacyManager(civ)?.let { dm -> o.civID to captureModifiers.mapNotNull { k -> dm.diplomaticModifiers[k]?.let { k to it } }.toMap() }
+        }.toMap()
+
+    /**
+     * A human's attack. Unciv asks a human what to do with a captured city (AlertPopup) and never automates it, but
+     * without a game screen Battle.conquerCity runs automateCityConquer, which may hand the city straight to its
+     * city-state founder. While attacking, the founder is masked as the current (major/at-war) owner — automateCityConquer
+     * then never liberates (it only liberates to city-states we're at peace with) — so the city stays ours
+     * pending the player's decision (liberate, annex, puppet, raze). Every capture is then put up for decision,
+     * except retaking our own original capital, which Unciv re-annexes at once.
+     */
+    fun attackKeepingCaptureChoice(u: MapUnit, target: AttackableTile, attack: () -> Unit) {
+        val civ = u.civ
+        val city = target.tileToAttack.takeIf { it.isCityCenter() }?.getCity()
+        if (city == null || !civ.isHuman() || city.civ == civ) { attack(); return }
+        val game = civ.gameInfo
+        val founder = city.foundingCivObject
+        val hide = founder != null && founder.isCityState && founder != city.civ && founder != civ && !city.hasDiplomaticMarriage()
+        val mods = modifiersToward(game, civ)
+        try {
+            // Not null: Victory milestones need a founder for original capitals. The owner gives the same resistance,
+            // raze and "retaking our capital" results (none of them is us), and no liberation.
+            if (hide) city.foundingCivObject = city.civ
+            attack()
+        } finally {
+            if (hide) city.foundingCivObject = founder
+        }
+        if (city.civ != civ || city.isOriginalCapital && city.foundingCivObject == civ) return
+        preCapture["${game.gameId}:${city.id}"] = PreCapture(game.turns, mods)
+        if (civ.popupAlerts.none { it.type == AlertType.CityConquered && it.value == city.id })
+            civ.popupAlerts.add(PopupAlert(AlertType.CityConquered, city.id))
+    }
+
+    /** AlertPopup.addCityConquered's options, from the state Unciv's automation left the city in. */
+    fun conquestChoices(civ: Civilization, city: City): List<Choice> {
+        val out = ArrayList<Choice>()
+        val founder = city.foundingCivObject
+        val occ = civ.isOneCityChallenger()
+        val recaptured = founder == civ
+        if (!occ) out += Choice("keep", "Keep it as is (${GameOps.conquestStatus(city)})", "What Unciv's automation chose", "👍")
+        // Unciv: anyone but us who founded it — even a defeated civ, which liberating brings back to life
+        if (founder != null && founder != civ && founder != city.civ)
+            out += Choice("liberate", "Liberate (return to ${founder.civName})",
+                if (founder.isDefeated()) "${founder.civName} is back in the game · massive relationship boost" else "Massive relationship boost with them", "🕊️")
+        if (occ) { out += Choice("destroy", "Destroy", "One-City Challenge: the city is razed to the ground at once", "💥"); return out }
+        val mayAnnex = GameOps.mayAnnex(civ)
+        if (mayAnnex && (city.isPuppet || city.isBeingRazed))
+            out += Choice("annex", "Annex" + (if (recaptured) " (your own city again)" else ""), "Part of your empire · 2x unhappiness from citizens without a Courthouse", "🏙️")
+        if (!city.isPuppet || city.isBeingRazed)
+            out += Choice("puppet", "Puppet", "No control over production · -25% science and culture · no tech/policy cost increase", "🎎")
+        if (!city.isBeingRazed && city.canBeDestroyed(justCaptured = true))
+            out += Choice("raze", "Raze", if (mayAnnex) "Annexes it and burns it down over time" else "Stays a puppet and burns down over time", "🔥")
+        return out
+    }
+
+    fun resolveConquest(civ: Civilization, city: City, choice: String): String {
+        val valid = conquestChoices(civ, city).map { it.id }
+        // "spare" (stop razing) and "keep" are always fine; anything else must be one of today's options
+        if (choice !in valid && choice != "spare" && choice != "keep" && !(choice == "puppet" && city.isPuppet))
+            throw PlayerError(when {
+                choice == "raze" && city.isBeingRazed -> "${city.name} is already being razed."
+                choice == "raze" -> "Original capitals and holy cities can't be razed."
+                else -> "That isn't possible for ${city.name}."
+            })
+        val msg = when (choice) {
+            "liberate" -> liberateCaptured(civ, city)
+            "annex" -> { GameOps.requireMayAnnex(civ); if (city.isPuppet) city.annexCity(); city.isBeingRazed = false; "🏙️ ${city.name} annexed." }
+            "puppet" -> {
+                // Unciv's puppetCity: a puppet, its production cleared (the city picks its own); not razing
+                if (!city.isPuppet || city.isBeingRazed) {
+                    city.isBeingRazed = false
+                    if (!city.isPuppet) { city.isPuppet = true; city.cityConstructions.removeAll() }
+                    city.cityStats.update()
+                }
+                "🎎 ${city.name} is a puppet."
+            }
+            "raze" -> {
+                if (!city.canBeDestroyed(justCaptured = true)) throw PlayerError("Original capitals and holy cities can't be razed.")
+                if (city.isPuppet && GameOps.mayAnnex(civ)) city.annexCity(); city.isBeingRazed = true; "🔥 ${city.name} is being razed."
+            }
+            "spare" -> { city.isBeingRazed = false; "🧯 ${city.name} will be spared." }
+            "destroy" -> {
+                // Unciv: a one-city challenger can only liberate or destroy (Battle destroys with overrideSafeties)
+                if (city.civ != civ) city.puppetCity(civ)
+                val name = city.name; city.destroyCity(overrideSafeties = true); "💥 $name was destroyed."
+            }
+            else -> if (civ.isOneCityChallenger()) {
+                if (city.civ != civ) city.puppetCity(civ)
+                val name = city.name; city.destroyCity(overrideSafeties = true); "💥 $name was destroyed."
+            } else "👍 ${city.name} stays ${GameOps.conquestStatus(city)}."
+        }
+        civ.popupAlerts.removeAll { it.type == AlertType.CityConquered && it.value == city.id }
+        return msg
+    }
+
+    /**
+     * CityConquestFunctions.liberateCity, for a city the headless capture already gave us: Unciv liberates straight from
+     * the old owner, so the capture itself (plunder, population loss, building losses) happened once, exactly like
+     * there. What only keeping a city causes is taken back first (the anger/warmonger penalties of conquering it),
+     * then Unciv's liberation repercussions, the move to the founder (resurrecting a defeated civ) and the clean-up.
+     */
+    private fun liberateCaptured(civ: Civilization, city: City): String {
+        val founder = city.foundingCivObject ?: throw PlayerError("Nobody to give ${city.name} back to.")
+        if (founder == civ || founder == city.civ) throw PlayerError("${city.name} already belongs to its founder.")
+        val game = civ.gameInfo
+        if (city.civ != civ) { city.liberateCity(civ); return "🕊️ ${city.name} liberated." }
+        preCapture.remove("${game.gameId}:${city.id}")?.takeIf { it.turn == game.turns }?.let { pre ->
+            for (o in game.civilizations) {
+                val dm = o.getDiplomacyManager(civ) ?: continue
+                val before = pre.modifiers[o.civID] ?: emptyMap()
+                for (k in captureModifiers) before[k]?.let { dm.diplomaticModifiers[k] = it } ?: dm.diplomaticModifiers.remove(k)
+            }
+        }
+        val oldOwner = game.civilizations.firstOrNull { it.civID == city.previousOwner && it != civ } ?: civ
+        val resurrect = founder.isDefeated()
+        if (!Engine.callHidden(CityConquestFunctions(city), "diplomaticRepercussionsForLiberatingCity", civ, oldOwner)) {
+            city.liberateCity(civ); return "🕊️ ${city.name} liberated." // engine changed: plain Unciv liberation
+        }
+        city.moveToCiv(founder)
+        if (founder.cities.size == 1) {
+            civ.capitalCityIndicator(city)?.let { city.cityConstructions.addBuilding(it) }
+            for (o in game.civilizations) {
+                if (o == founder || o == civ) continue
+                when {
+                    o.knows(civ) && o.knows(founder) -> o.addNotification("[$civ] has liberated [$founder]", NotificationCategory.Diplomacy, founder.civName, NotificationIcon.Diplomacy, civ.civName)
+                    o.knows(civ) -> o.addNotification("[$civ] has liberated [an unknown civilization]", NotificationCategory.Diplomacy, NotificationIcon.Diplomacy, civ.civName)
+                    o.knows(founder) -> o.addNotification("[An unknown civilization] has liberated [$founder]", NotificationCategory.Diplomacy, NotificationIcon.Diplomacy, founder.civName)
+                }
+            }
+        }
+        city.isPuppet = false
+        city.isBeingRazed = false
+        city.removeFlag(CityFlags.Resistance) // liberating a city ends its resistance
+        city.cityStats.update()
+        for (unit in city.getCenterTile().getUnits().toList()) unit.movement.teleportToClosestMoveableTile()
+        for (unit in city.getTiles().flatMap { it.getUnits() }.toList())
+            if (!unit.movement.canPassThrough(unit.currentTile)) unit.movement.teleportToClosestMoveableTile()
+        return "🕊️ ${city.name} liberated — it's ${founder.civName}'s again" + (if (resurrect) " (**${founder.civName} is back in the game!**)." else ".")
+    }
+
     // ================================================================ verbs
 
     override fun handle(verb: String, ctx: ActionCtx): Boolean {
@@ -1138,10 +1469,29 @@ object CityPlus : Extension {
             "cp_spec" -> { ctx.flash += doSpecialist(ctx); ctx.changed = true }
             "cp_reset" -> {
                 ctx.requireTurn(); val city = cityOf(ctx)
-                if (city.getCityFocus() == CityFocus.Manual) city.setCityFocus(CityFocus.NoFocus)
-                city.reassignAllPopulation() // automatic specialists + unlock everything (Unciv's "Reset Citizens")
-                ctx.flash += "🔄 ${city.name}'s citizens are back on automatic — all locks cleared."; ctx.changed = true
+                // Unciv's "Reset Citizens" (CitizenManagementTable): unlock everything and re-plan; the focus and the
+                // specialist mode stay as they are (manual specialists are kept, like in Unciv)
+                need(cityView(city).tryReassignPopulation(resetLocked = true))
+                ctx.flash += "🔄 ${city.name}'s citizens were reset — all locks cleared" +
+                    (if (city.manualSpecialists) " (specialists stay manual)." else "."); ctx.changed = true
             }
+            "cp_reassign" -> {
+                ctx.requireTurn(); val city = cityOf(ctx)
+                val before = city.population.getFreePopulation()
+                need(cityView(city).tryReassignPopulation()) // Unciv: click on "Unassigned population"
+                val after = city.population.getFreePopulation()
+                ctx.flash += "🧍 ${city.name} re-planned its citizens — locked tiles kept" +
+                    (if (before != after) " ($before → $after unemployed)." else if (after > 0) " ($after still unemployed: no job is worth it)." else "."); ctx.changed = true
+            }
+            "cp_worktile" -> {
+                ctx.requireTurn()
+                val city = cityOf(ctx)
+                val tile = ctx.tile(ctx.value?.trim().orEmpty().ifEmpty { throw PlayerError("Type a tile code, like D5.") })
+                ctx.flash += doTile(ctx, "w:${tile.position.x},${tile.position.y}"); ctx.changed = true
+                ctx.st.cityId = city.id
+            }
+            "cp_buyimp" -> { ctx.flash += buyWithTile(ctx); select(ctx.st, ctx.selectedCity(), null); ctx.changed = true }
+            "cp_bsel" -> ctx.st.ext["cp_bsel"] = ctx.value?.removePrefix("b:").orEmpty()
             "cp_avoid" -> {
                 ctx.requireTurn(); val city = cityOf(ctx)
                 city.avoidGrowth = !city.avoidGrowth; city.reassignPopulation()
@@ -1181,7 +1531,7 @@ object CityPlus : Extension {
                     ctx.st.cityId = cs[Math.floorMod(i + (ctx.args.firstOrNull()?.toIntOrNull() ?: 1), cs.size)].id
                 }
             }
-            "cp_pview" -> ctx.st.ext["cp_details"] = ctx.st.ext["cp_details"] != true
+            "cp_pview" -> ctx.st.ext["cp_view"] = ctx.args.firstOrNull()?.takeIf { it in VIEWS } ?: VIEWS[(VIEWS.indexOf(view(ctx.st)) + 1) % VIEWS.size]
             "cp_psel" -> { val city = ctx.selectedCity(); select(ctx.st, city, ctx.value?.takeIf { it.startsWith("q:") || it.startsWith("c:") }) }
             "cp_pact" -> { ctx.flash += doProductionAction(ctx); ctx.changed = true }
             "cp_imptile" -> {
@@ -1200,11 +1550,12 @@ object CityPlus : Extension {
                 val name = ctx.value?.removePrefix("x:") ?: return true
                 val c = GameOps.construction(city, name) as? INonPerpetualConstruction ?: return true
                 val reasons = c.getRejectionReasons(city.cityConstructions).filter { it.shouldShow }.map { GameOps.clean(it.errorMessage) }.distinct().toList()
-                ctx.flash += "🚫 **$name** in ${city.name}: " + reasons.ifEmpty { listOf("can't be built right now") }.joinToString("; ")
+                ctx.flash += "🚫 **$name** in ${city.name}: " + reasons.ifEmpty { listOf("can't be built right now") }.joinToString("; ") +
+                    missingLines(city, c, ctx.st).joinToString("") { "\n$it" }
             }
             "cp_ovpage" -> ctx.st.ext["cp_ovpage"] = ((ctx.st.ext["cp_ovpage"] as? Int) ?: 0) + (ctx.args.firstOrNull()?.toIntOrNull() ?: 1)
             "cp_ovsort" -> { ctx.st.ext["cp_ovsort"] = ctx.value?.removePrefix("sort:") ?: "default"; ctx.st.ext["cp_ovpage"] = 0 }
-            "cp_ovcity" -> { ctx.st.cityId = ctx.value?.removePrefix("city:"); ctx.st.tab = PROD; ctx.st.ext["cp_details"] = false }
+            "cp_ovcity" -> { ctx.st.cityId = ctx.value?.removePrefix("city:"); ctx.st.tab = PROD; ctx.st.ext["cp_view"] = "queue" }
             "cp_won" -> ctx.st.ext["cp_wonder"] = ctx.value?.removePrefix("w:").orEmpty()
             else -> return false
         }
@@ -1249,6 +1600,28 @@ object CityPlus : Extension {
         ok(t.eng { g -> val c = city(g); val tl = tileFrom(g, toWork); c.isWorked(tl) && c.lockedTiles.contains(tl.position) }, "worked tile is locked")
         t.act(a, "cp_tile", emptyList(), "u:" + toWork.drop(2), "citizens: unlock tile")
         t.act(a, "cp_tile", emptyList(), "l:" + toWork.drop(2), "citizens: lock tile")
+        // the whole tile list (the panel pages it), plus re-plan and work-by-code entries
+        val (nChoices, nExpected) = t.eng { g -> val c = city(g)
+            tileChoices(c, st).size to (2 + c.getWorkedTiles().count() * 2 + c.tilesInRange.count { !c.isWorked(it) && workable(c, it) }) }
+        ok(nChoices == nExpected, "tile list not capped ($nChoices entries)")
+        ok(t.eng { g -> tileChoices(city(g), st).take(2).map { it.id } } == listOf("do:cp_reassign", "ask:cp_worktile"), "reassign + work-by-code offered first")
+        ok(t.eng { g -> val c = city(g); specialistChoices(c).size == c.population.getMaxSpecialists().asSequence().filter { it.key in g.ruleset.specialists }
+            .sumOf { (n, max) -> (if (c.population.getNewSpecialists()[n] < max) 1 else 0) + (if (c.population.getNewSpecialists()[n] > 0) 1 else 0) } }, "specialist list not capped")
+        // work a tile by typing its code
+        t.act(a, "tab", emptyList(), TAB, null); t.render(a, null)
+        t.act(a, "cp_tile", emptyList(), firstChoice("s:")!!, null)
+        val byCode = t.eng { g -> val c = city(g)
+            c.tilesInRange.filter { !c.isWorked(it) && workable(c, it) }.firstNotNullOfOrNull { tl -> st.window?.code(tl.position.x, tl.position.y)?.let { tl.position to it } } }
+        ok(byCode != null, "an unworked tile with a map code")
+        t.act(a, "cp_worktile", emptyList(), byCode!!.second, "citizens: work a tile by code")
+        ok(t.eng { g -> val c = city(g); val tl = g.tileMap[byCode.first]; c.isWorked(tl) && c.lockedTiles.contains(tl.position) }, "tile ${byCode.second} worked and locked")
+        ok(!t.act(a, "cp_worktile", emptyList(), t.eng { g -> code(st, city(g).getCenterTile()) }, null), "can't 'work' the city centre by code")
+        // Unciv's "Unassigned population" click: re-plan, keeping locks
+        t.eng { g -> val c = city(g); c.getWorkedTiles().firstOrNull { !c.lockedTiles.contains(it.position) }?.let { "s:${it.position.x},${it.position.y}" } }
+            ?.let { t.act(a, "cp_tile", emptyList(), it, null) }
+        t.act(a, "cp_tile", emptyList(), "do:cp_reassign", "citizens: reassign keeping locks")
+        ok(t.eng { g -> val c = city(g); val tl = g.tileMap[byCode.first]; c.isWorked(tl) && c.lockedTiles.contains(tl.position) && c.lockedTiles.contains(tileFrom(g, toWork).position) },
+            "re-plan kept the locked tiles")
         // unemployed rule: nobody free -> working another tile / adding a specialist is refused
         t.eng { g -> val c = city(g); while (c.population.getFreePopulation() > 0) c.workTile(c.tilesInRange.firstOrNull { !c.isWorked(it) && workable(c, it) } ?: break) }
         firstChoice("w:")?.let { ok(!t.act(a, "cp_tile", emptyList(), it, null), "can't work a tile without an unemployed citizen") }
@@ -1275,11 +1648,15 @@ object CityPlus : Extension {
         t.act(a, "cp_avoid", emptyList(), null, "citizens: avoid growth toggle")
         t.act(a, "cp_avoid", emptyList(), null, null)
         t.act(a, "cp_manspec", emptyList(), null, "citizens: specialist mode toggle")
-        t.act(a, "cp_reset", emptyList(), null, "citizens: reset to automatic")
+        // Reset like Unciv's CitizenManagementTable: unlock all, keep the focus and manual specialists
+        t.eng { g -> val c = city(g); c.manualSpecialists = true; c.setCityFocus(CityFocus.FoodFocus) }
+        t.act(a, "cp_reset", emptyList(), null, "citizens: reset (locks cleared)")
         // Unciv's governor may leave a citizen unemployed when no job is worth anything; it must be the same as Unciv's own reset
         val freeAfterReset = t.eng { g -> city(g).population.getFreePopulation() }
-        ok(t.eng { g -> val c = city(g); c.lockedTiles.isEmpty() && !c.manualSpecialists &&
-            run { c.reassignAllPopulation(); freeAfterReset == c.population.getFreePopulation() } }, "reset unlocks all and re-employs everyone ($freeAfterReset unemployed)")
+        ok(t.eng { g -> val c = city(g); c.lockedTiles.isEmpty() && c.manualSpecialists && c.getCityFocus() == CityFocus.FoodFocus &&
+            run { c.reassignPopulation(resetLocked = true); freeAfterReset == c.population.getFreePopulation() } },
+            "reset unlocks all, keeps focus and manual specialists, matches Unciv ($freeAfterReset unemployed)")
+        t.eng { g -> val c = city(g); c.manualSpecialists = false; c.setCityFocus(CityFocus.NoFocus); c.reassignPopulation(resetLocked = true) }
 
         // --- sell a building (one per city per turn)
         val sellId = "cp:sell:$specBuilding"
@@ -1337,6 +1714,16 @@ object CityPlus : Extension {
         t.act(a, "selunit", emptyList(), "u:$workerId", null); t.act(a, "uact", emptyList(), "do:cp_undo", "undo (unit actions)")
         ok(t.eng { g -> queueNames(worker(g).getTile()) } == listOf("Remove Forest"), "second undo removed the queued Farm")
         ok(!t.act(t.bob, "cp_undo", emptyList(), null, null), "the other player can't undo")
+        // Unciv clears undo once new tiles are explored
+        t.act(a, "cp_rename_city", listOf(cityId), "Explore Test", null)
+        ok(t.eng { g -> validStack(g, GameOps.civOf(g, a)) != null }, "undo available after a rename")
+        t.eng { g -> val civ = GameOps.civOf(g, a)
+            g.tileMap.values.filter { !it.isExplored(civ) }.minByOrNull { it.aerialDistanceTo(city(g).getCenterTile()) }!!.setExplored(civ, true) }
+        ok(t.eng { g -> validStack(g, GameOps.civOf(g, a)) == null && cityChoices(city(g), st.window).first().label.contains("not available") },
+            "undo cleared after exploring a new tile, '$UNDO_BLOCKED' shown")
+        ok(t.act(a, "cact", emptyList(), "do:cp_undo", "undo: not available after exploring") && st.flash.last().startsWith(UNDO_BLOCKED) &&
+            t.eng { g -> city(g).name } == "Explore Test", "undo refused after exploring, with the reason")
+        t.eng { g -> city(g).name = "Nova Roma" }
         t.eng { _ -> onTurnEnded(t.s) }
         ok(t.eng { g -> validStack(g, GameOps.civOf(g, a)) == null }, "no undo entries after a turn ends")
         ok(!t.act(a, "cact", emptyList(), "do:cp_undo", null), "undo refused after the turn ended")
@@ -1344,6 +1731,7 @@ object CityPlus : Extension {
         t.render(a, "cityplus-citizens-final")
         st.flash.clear()
         selfTestProduction(t)
+        selfTestCaptures(t)
     }
 
     /** Production queue, buying, perpetual and "creates one improvement" constructions, disabling, focus, annex/raze
@@ -1513,6 +1901,25 @@ object CityPlus : Extension {
         t.eng { g -> dropUnique(g, "May not annex cities") }
         t.act(a, "cact", emptyList(), "annex", "annex a puppet")
         ok(t.eng { g -> !city2(g).isPuppet }, "annexed")
+        // --- "Show cities missing requirements" (ConstructionInfoTable.tryAddShowMissingCities)
+        val needAll = t.eng { g -> g.ruleset.buildings.values.firstNotNullOfOrNull { b -> missingCities(city(g), b).firstOrNull()?.let { b.name to it.first } } }
+        ok(needAll != null, "a building that needs something in all cities: $needAll")
+        t.eng { g -> city(g).cityConstructions.addBuilding(needAll!!.second) } // only the second city lacks it now
+        ok(t.eng { g -> missingCities(city(g), g.ruleset.buildings[needAll!!.first]!!).single().second.map { it.id } } == listOf(city2Id), "only ${needAll!!.second}-less city listed")
+        t.act(a, "selcity", emptyList(), "city:$cityId", null); t.act(a, "tab", emptyList(), PROD, null)
+        pick("c:${needAll.first}")
+        ok("show:$city2Id" in acts(), "'Show <city>' offered for the one missing city")
+        act("show:$city2Id", "why can't I build: show the city missing the requirement")
+        ok(st.cityId == city2Id && st.flash.last().contains(needAll.second), "jumped to the city that needs a ${needAll.second}")
+        t.act(a, "selcity", emptyList(), "city:$cityId", null)
+        t.act(a, "cp_cant", emptyList(), "x:${needAll.first}", null)
+        ok(st.flash.last().contains("**${needAll.second}** first"), "missing cities listed with the rejection reason")
+        t.eng { g -> city(g).cityConstructions.removeBuilding(needAll.second) }
+        ok(t.eng { g -> missingCities(city(g), g.ruleset.buildings[needAll.first]!!).single().second.size } == 2, "two cities missing it")
+        pick("c:${needAll.first}"); ok(acts().any { it.startsWith("showall:") }, "'Show cities missing requirements' offered")
+        act(acts().first { it.startsWith("showall:") }, "why can't I build: show all cities missing requirements")
+        ok(st.flash.last().contains("2 cities need"), "both cities listed")
+        st.ext.remove("cp_sel")
         val city3Id = t.eng { g ->
             val c = civ(g); val c2 = city2(g)
             val tile = c2.getCenterTile().getTilesInDistanceRange(4..14).sortedBy { it.aerialDistanceTo(c2.getCenterTile()) }
@@ -1534,6 +1941,10 @@ object CityPlus : Extension {
         t.act(a, "cact", emptyList(), "focus:GoldGrowthFocus", "focus: gold + growth")
         ok(t.eng { g -> city(g).getCityFocus() == CityFocus.GoldGrowthFocus }, "gold growth focus set")
         t.act(a, "cact", emptyList(), "focus:ProductionGrowthFocus", "focus: production + growth")
+        ok("focus:Manual" in foci, "manual focus offered (CitizenManagementTable)")
+        val workedBefore = t.eng { g -> city(g).workedTiles.toSet() }
+        t.act(a, "cact", emptyList(), "focus:Manual", "focus: manual")
+        ok(t.eng { g -> city(g).getCityFocus() == CityFocus.Manual && city(g).workedTiles.toSet().containsAll(workedBefore) }, "manual focus set, worked tiles kept")
         t.eng { g -> city(g).setCityFocus(CityFocus.NoFocus) }
 
         // --- "creates one improvement" buildings (a test building; G&K has none)
@@ -1563,6 +1974,17 @@ object CityPlus : Extension {
             t.render(a, "cityplus-production-improvement"); dump("cityplus-production-improvement")
             act(acts().first { it.startsWith("buy:Gold~") && it.endsWith("~$testB") }, "creates-one: buying places the improvement")
             ok(t.eng { g -> g.tileMap[tx].improvement } == impName && testB !in queue(), "improvement built on $tcode")
+            // buying it outside the queue: Unciv asks for the tile (BuyButtonFactory -> startPickTileForCreatesOneImprovement)
+            t.eng { g -> city(g).cityConstructions.removeBuilding(testB) }
+            pick("c:$testB")
+            ok(acts().any { it == "ask:cp_buyimp:Gold~$testB" } && acts().none { it.startsWith("buy:Gold~-1~$testB") }, "buying outside the queue asks for the tile")
+            ok(t.eng { g -> GameOps.buyChoices(city(g)).any { it.id == "ask:cp_buyimp:Gold~$testB" } }, "city actions ask for the tile too")
+            val (tx2, tcode2) = t.eng { g -> val c = city(g); val imp = g.ruleset.tileImprovements[impName!!]!!
+                val tl = c.getTiles().filter { it.position != tx && c.cityConstructions.canPlaceCreateOneImprovementOn(imp, it) }.first { st.window?.code(it.position.x, it.position.y) != null }
+                tl.position to st.window!!.code(tl.position.x, tl.position.y)!! }
+            ok(!t.act(a, "cp_buyimp", listOf("Gold~$testB"), t.eng { g -> code(st, city(g).getCenterTile()) }, null), "can't place it on the city centre")
+            t.act(a, "cp_buyimp", listOf("Gold~$testB"), tcode2, "creates-one: buy outside the queue on a chosen tile")
+            ok(t.eng { g -> g.tileMap[tx2].improvement == impName && city(g).cityConstructions.isBuilt(testB) }, "bought, improvement on the chosen tile $tcode2")
         } finally {
             t.eng { g -> val c = city(g); st.queueMode = false
                 if (c.cityConstructions.isBuilt(testB)) c.cityConstructions.removeBuilding(testB)
@@ -1591,8 +2013,9 @@ object CityPlus : Extension {
         // --- 📈 city details
         t.eng { g -> val c = city(g); c.setFlag(CityFlags.WeLoveTheKing, 5); c.setFlag(CityFlags.Resistance, 2) }
         t.act(a, "tab", emptyList(), PROD, null)
-        if (st.ext["cp_details"] == true) t.act(a, "cp_pview", emptyList(), null, null)
+        t.act(a, "cp_pview", listOf("queue"), null, null)
         t.act(a, "cp_pview", emptyList(), null, "city details view")
+        ok(view(st) == "details", "queue -> details")
         val info = t.eng { g -> growthAndBorders(city(g)) }
         ok(info.any { it.contains("We Love the King") } && info.any { it.contains("resistance") } && info.any { it.contains("Borders") }, "borders, WLTK and resistance shown")
         t.act(a, "cp_stat", emptyList(), "s:Gold", "detailed stat breakdown")
@@ -1603,11 +2026,26 @@ object CityPlus : Extension {
         if (cant != null) { t.act(a, "cp_cant", emptyList(), "x:${cant.first.name}", "why can't it be built (rejection reason)"); ok(st.flash.lastOrNull()?.startsWith("🚫") == true, "reason shown") }
         t.render(a, "cityplus-details"); dump("cityplus-details")
         t.eng { g -> val c = city(g); c.removeFlag(CityFlags.WeLoveTheKing); c.removeFlag(CityFlags.Resistance) }
+        // --- 🏠 built buildings (CityStatsTable.addBuildingsInfo)
+        t.act(a, "cp_pview", emptyList(), null, "built buildings view")
+        ok(view(st) == "buildings", "details -> buildings")
+        val built = t.eng { g -> builtGroups(city(g)).flatMap { it.second }.map { it.name } }
+        ok(built.isNotEmpty() && t.eng { g -> built.toSet() == city(g).cityConstructions.getBuiltBuildings().map { it.name }.toSet() }, "every built building listed (${built.size})")
+        ok(t.eng { g -> val c = city(g); c.cityConstructions.getBuiltBuildings().filter { it.maintenance > 0 && !c.civ.civConstructions.hasFreeBuilding(c, it) }
+            .all { buildingLine(c, it).contains("upkeep") } }, "upkeep shown")
+        t.act(a, "cp_bsel", emptyList(), "b:${built.first()}", "built buildings: look at one")
+        t.render(a, "cityplus-buildings"); dump("cityplus-buildings")
         t.act(a, "cp_pview", emptyList(), null, null)
+        ok(view(st) == "queue", "buildings -> queue")
 
         // --- 🏙️ cities overview, 🏛️ wonders
         t.act(a, "tab", emptyList(), CITYOV, "cities overview tab")
         t.act(a, "cp_ovsort", emptyList(), "sort:pop", "cities overview: sort")
+        for (k in listOf("food", "happy", "garrison") + (if (t.eng { g -> g.isReligionEnabled() }) listOf("faith") else emptyList()))
+            t.act(a, "cp_ovsort", emptyList(), "sort:$k", "cities overview: sort by $k")
+        ok(t.eng { g -> sortedCities(civ(g), "happy").zipWithNext().all { (x, y) -> happiness(x) >= happiness(y) } }, "happiness sort")
+        ok(t.eng { g -> civ(g).cities.all { cityLine(it).contains("😊") && cityLine(it).contains("garrison") } }, "happiness and garrison columns")
+        t.act(a, "cp_ovsort", emptyList(), "sort:pop", null)
         t.render(a, "cityplus-cities-overview"); dump("cityplus-cities-overview")
         t.act(a, "cp_ovcity", emptyList(), "city:$city2Id", "cities overview: open a city")
         ok(st.tab == PROD && st.cityId == city2Id, "jumped to the city's production")
@@ -1620,5 +2058,110 @@ object CityPlus : Extension {
         t.render(a, "cityplus-wonders"); dump("cityplus-wonders")
         t.act(a, "selcity", emptyList(), "city:$cityId", null)
         st.ext.remove("cp_sel"); st.flash.clear()
+    }
+
+    /** Real captures by Alice (on a copy of the game, restored afterwards): a city-state's city held by Bob (Unciv's
+     *  automation would hand it back to the city-state), then her own city back from Bob; undo after combat. */
+    private fun selfTestCaptures(t: SelfTestCtx) {
+        val a = t.alice
+        fun ok(cond: Boolean, what: String) { if (!cond) throw IllegalStateException("CityPlus: $what"); println("  CityPlus ok: $what") }
+        val st = t.ctl.state(t.s.meta.id, a.userId)
+        fun civ(g: GameInfo) = GameOps.civOf(g, a)
+        fun bob(g: GameInfo) = GameOps.civOf(g, t.bob)
+        fun cityById(g: GameInfo, id: String) = g.getCities().first { it.id == id }
+        val saved = t.eng { g -> Engine.serialize(g) }
+        try {
+            /** Give [city] to Bob, empty and at 1 HP, with an Alice warrior next to it; returns the warrior's id. */
+            fun prepare(g: GameInfo, city: City): Int {
+                val alice = civ(g); val b = bob(g)
+                for (o in listOf(b, city.civ)) if (o != alice && !alice.knows(o)) alice.diplomacyFunctions.makeCivilizationsMeet(o)
+                if (city.civ != b) { city.puppetCity(b); city.annexCity() }
+                if (!alice.isAtWarWith(b)) alice.getDiplomacyManager(b)!!.declareWar()
+                val center = city.getCenterTile()
+                for (u in center.getUnits().toList()) u.destroy()
+                city.health = 1
+                val spot = center.neighbors.first { it.isLand && !it.isImpassible() && !it.isCityCenter() && it.getUnits().none() }
+                val w = alice.units.placeUnitNearTile(spot.position, "Warrior")!!
+                w.currentMovement = w.getMaxMovement().toFloat()
+                alice.cache.updateViewableTiles()
+                return w.id
+            }
+            fun attackWith(unitId: Int, cityId: String, feature: String) {
+                t.act(a, "selunit", emptyList(), "u:$unitId", null)
+                val atk = t.eng { g -> val c = cityById(g, cityId).getCenterTile()
+                    GameOps.unitChoices(GameOps.unitById(civ(g), unitId)!!).firstOrNull { it.id == "atk:${c.position.x},${c.position.y}" }?.id }
+                ok(atk != null, "warrior can attack the city")
+                t.act(a, "uact", emptyList(), atk!!, feature)
+            }
+
+            // --- a city-state's only city, taken by Bob: the city-state is defeated
+            val (csCityId, csId) = t.eng { g ->
+                val cs = g.civilizations.first { it.isCityState && it.isAlive() && it.cities.size == 1 &&
+                    it.cities[0].getCenterTile().neighbors.any { n -> n.isLand && !n.isImpassible() && n.getUnits().none() } }
+                cs.cities[0].id to cs.civID
+            }
+            val warrior = t.eng { g -> val city = cityById(g, csCityId); val cs = g.getCivilization(csId)
+                val id = prepare(g, city)
+                for (u in cs.units.getCivUnits().toList()) u.destroy()
+                com.unciv.logic.battle.Battle.destroyIfDefeated(cs, bob(g))
+                id }
+            ok(t.eng { g -> g.getCivilization(csId).isDefeated() && cityById(g, csCityId).civ == bob(g) }, "test setup: Bob holds the city-state's city, the city-state is gone")
+            // What Unciv's headless automation alone would do with this capture (on a throw-away copy)
+            fun automationLiberates(unhappy: Int) = t.eng { g ->
+                val g2 = Engine.deserialize(Engine.serialize(g)); com.unciv.UncivGame.Current.gameInfo = g2
+                try {
+                    val u = GameOps.unitById(GameOps.civOf(g2, a), warrior)!!; val tl = cityById(g2, csCityId).getCenterTile()
+                    if (unhappy != 0) GameOps.civOf(g2, a).stats.happiness = unhappy
+                    com.unciv.logic.battle.Battle.moveAndAttack(com.unciv.logic.battle.MapUnitCombatant(u), GameOps.attackableTargets(u).first { it.tileToAttack == tl })
+                    cityById(g2, csCityId).civ.civID == csId
+                } finally { com.unciv.UncivGame.Current.gameInfo = g }
+            }
+            // automateCityConquer weighs liberation up when the conqueror is unhappy
+            val unhappy = listOf(0, -20, -60).firstOrNull { automationLiberates(it) }
+            val liberates = unhappy != null
+            if (unhappy != null && unhappy != 0) t.eng { g -> civ(g).stats.happiness = unhappy }
+            println("  CityPlus: Unciv's automation alone liberates this capture: $liberates (happiness $unhappy)")
+            ok(liberates, "test setup: Unciv's headless automation alone would hand the city to the city-state")
+            // undo before the fight works…
+            t.act(a, "cp_rename_city", listOf(t.eng { g -> civ(g).cities.first().id }), "Before The War", null)
+            ok(t.eng { g -> validStack(g, civ(g)) != null }, "undo available before the attack")
+            attackWith(warrior, csCityId, "captured city: attack and capture")
+            ok(t.eng { g -> cityById(g, csCityId).civ == civ(g) && GameOps.pendingConquest(civ(g))?.id == csCityId },
+                "captured city kept for the player's decision (not handed to the city-state)")
+            val choices = t.eng { g -> GameOps.conquestChoices(civ(g), cityById(g, csCityId)).map { it.id } }
+            ok("liberate" in choices && ("puppet" in choices || "annex" in choices), "liberate to the defeated city-state offered: $choices")
+            // …but not after it (Unciv clears undo checkpoints after combat)
+            ok(t.eng { g -> validStack(g, civ(g)) == null && cityChoices(civ(g).cities.first(), st.window).first().label.contains("not available") },
+                "undo cleared after combat, '$UNDO_BLOCKED' shown")
+            ok(t.act(a, "cact", emptyList(), "do:cp_undo", "undo: not available after combat") && st.flash.last().startsWith(UNDO_BLOCKED) &&
+                t.eng { g -> cityById(g, csCityId).civ == civ(g) }, "undo refused after combat, with the reason")
+            t.act(a, "tab", emptyList(), "UNITS", null)
+            t.render(a, "cityplus-captured")
+            t.act(a, "conq", listOf(csCityId), "liberate", "captured city: liberate (resurrects a defeated city-state)")
+            ok(t.eng { g -> val cs = g.getCivilization(csId); val c = cityById(g, csCityId)
+                c.civ == cs && cs.isAlive() && !c.isPuppet && !c.isInResistance() && GameOps.pendingConquest(civ(g)) == null &&
+                    cs.getDiplomacyManager(civ(g))!!.getInfluence() >= 60f }, "city back with the city-state, which is alive again and likes us")
+
+            // --- our own (non-capital) city recaptured from Bob: Unciv asks too, without a liberate option
+            val ownId = t.eng { g -> civ(g).cities.first { !it.isCapital() && !it.isOriginalCapital }.id }
+            val warrior2 = t.eng { g -> prepare(g, cityById(g, ownId)) }
+            attackWith(warrior2, ownId, "captured city: recapture our own city")
+            ok(t.eng { g -> GameOps.pendingConquest(civ(g))?.id == ownId }, "recaptured own city needs a decision")
+            val own = t.eng { g -> GameOps.conquestChoices(civ(g), cityById(g, ownId)).map { it.id } }
+            ok("liberate" !in own && "annex" in own, "annex/puppet/raze but no liberate for our own city: $own")
+            t.act(a, "conq", listOf(ownId), "annex", "captured city: annex")
+            ok(t.eng { g -> !cityById(g, ownId).isPuppet && GameOps.pendingConquest(civ(g)) == null }, "annexed")
+            // Unciv's automation razed (and annexed) it: the player may still make it a puppet
+            t.eng { g -> val c = cityById(g, ownId); c.isBeingRazed = true; civ(g).popupAlerts.add(PopupAlert(AlertType.CityConquered, c.id)) }
+            ok(t.eng { g -> GameOps.conquestChoices(civ(g), cityById(g, ownId)).map { it.id }.containsAll(listOf("puppet", "annex")) }, "puppet and annex offered for a city being razed")
+            t.act(a, "conq", listOf(ownId), "puppet", "captured city: puppet instead of raze")
+            ok(t.eng { g -> val c = cityById(g, ownId); c.isPuppet && !c.isBeingRazed }, "puppet, not burning")
+            ok(t.eng { g -> Features.flagNewConquests(civ(g), emptySet()); civ(g).popupAlerts.none { it.type == AlertType.CityConquered && it.value == civ(g).cities.first { c -> c.isOriginalCapital }.id } },
+                "retaking/holding the original capital is never asked about")
+        } finally {
+            t.eng { _ -> val g2 = Engine.deserialize(saved); t.s.game = g2; com.unciv.UncivGame.Current.gameInfo = g2; stacks.remove(g2.gameId) }
+            st.unitId = null; st.flash.clear()
+            t.act(a, "selcity", emptyList(), "city:${t.eng { g -> civ(g).cities.first().id }}", null)
+        }
     }
 }
