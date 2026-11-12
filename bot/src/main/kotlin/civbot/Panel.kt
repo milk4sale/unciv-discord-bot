@@ -173,12 +173,11 @@ object Panel {
         }
 
         val rows = ArrayList<ActionRow>()
-        rows += ActionRow.of(StringSelectMenu.create(id(gid, "tab")).setPlaceholder("Open a tab…")
-            .addOptions((Tab.entries.map { t ->
-                SelectOption.of(t.label, t.name).withEmoji(Emoji.fromUnicode(t.emoji)).withDescription(t.hint).withDefault(t.name == st.tab)
-            } + Extensions.all.flatMap { it.tabs }.filter { runCatching { it.visible(civ) }.getOrDefault(false) }.map { t ->
-                SelectOption.of(t.label, t.id).withEmoji(Emoji.fromUnicode(t.emoji)).withDescription(t.hint.take(100)).withDefault(t.id == st.tab)
-            }).take(25)).build())
+        // Tab list: core tabs + visible extension tabs; pages automatically if there are more than 25
+        val tabChoices = Tab.entries.map { t -> Choice(t.name, t.label, t.hint, t.emoji) } +
+            Extensions.all.flatMap { it.tabs }.filter { runCatching { it.visible(civ) }.getOrDefault(false) }
+                .map { t -> Choice(t.id, t.label, t.hint, t.emoji) }
+        rows += ActionRow.of(select(id(gid, "tab"), "Open a tab…", tabChoices, st.tab))
 
         // Decisions that come before anything else
         var file: FileUpload? = null
