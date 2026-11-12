@@ -62,6 +62,8 @@ class ActionCtx(
     val args: List<String>, val value: String?,
 ) {
     var changed = false
+    /** Set to end this player's turn after the action (like the End turn button, without the checklist) */
+    var endTurn = false
     val flash get() = st.flash
     fun requireTurn() { if (!myTurn) throw PlayerError("It's not your turn — you can look around, but not act.") }
     fun selectedUnit(): MapUnit = st.unitId?.let { GameOps.unitById(civ, it) } ?: throw PlayerError("Select a unit first.")

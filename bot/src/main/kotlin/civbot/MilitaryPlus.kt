@@ -346,6 +346,8 @@ object MilitaryPlus : Extension {
                 "👣 ${GameOps.movesText(unit)} · ${GameOps.unitStatus(unit)}" +
                 (if (unit.getRange() > 1) " · range ${unit.getRange()}" else ""), false)
 
+        if (unit != null && myTurn) UnitsPlus.combatPreviewField(unit, MapWindow(center.position))?.let { t.eb.addField(it.first, it.second, false) }
+
         // Map: selected unit, with its targets (or the pending blast zone) in red, rebase spots light
         if (unit != null) {
             val p = pendingFor(unit)
@@ -367,7 +369,7 @@ object MilitaryPlus : Extension {
             orders += militaryChoices(unit)
             if (!unit.isNuclearWeapon()) for (a in GameOps.attackableTargets(unit).take(8))
                 orders += Choice("atk:${a.tileToAttack.position.x},${a.tileToAttack.position.y}",
-                    "Attack ${targetName(a.tileToAttack, civ)}", code(a.tileToAttack), "⚔️")
+                    "Attack ${targetName(a.tileToAttack, civ)}", code(a.tileToAttack) + (UnitsPlus.previewShort(unit, a)?.let { " · $it" } ?: ""), "⚔️")
             if (unit.canFortify() && !unit.isFortified() && unit.hasMovement()) orders += Choice("fortify", "Fortify", "+defence, stays put", "🛡️")
             if (!unit.canFortify() && !unit.isSleeping() && unit.hasMovement()) orders += Choice("sleep", "Sleep", "Stays put (still intercepts if it can)", "💤")
             if (unit.isFortified() || unit.isSleeping()) orders += Choice("wake", "Wake up", GameOps.unitStatus(unit), "⏰")

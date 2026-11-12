@@ -214,12 +214,14 @@ object Panel {
                 if (unit != null) {
                     val t = unit.getTile()
                     eb.addField("${GameOps.unitEmoji(unit)} ${unit.label()}",
-                        "❤️ ${unit.health}/100 · 👣 ${GameOps.movesText(unit)} · ${UnitsPlus.statusText(unit, window)}" +
+                        "❤️ ${unit.health}/100 · 👣 ${GameOps.movesText(unit)} · ${UnitsPlus.statusText(unit, window, withTurns = true)}" +
                             "\n⚔️ strength ${unit.baseUnit.strength}" + (if (unit.baseUnit.rangedStrength > 0) " · 🏹 ranged ${unit.baseUnit.rangedStrength} (range ${unit.getRange()})" else "") +
                             (if (unit.isEscorting()) " · 🤝 escorting" else "") +
                             "\n📍 ${window.code(t.position.x, t.position.y)} — ${GameOps.tileDescription(t, civ)}" +
                             (if (unit.promotions.promotions.isNotEmpty()) "\n⭐ ${unit.promotions.promotions.joinToString()}" else "") +
+                            UnitsPlus.unitInfoText(unit) +
                             (if (reach.isNotEmpty()) "\n_Lighter tiles = reachable this turn. Red = attackable._" else ""), false)
+                    for ((n, v) in UnitsPlus.unitFields(unit, window, myTurn, meta)) eb.addField(n, v.take(1024), false) // combat preview, unavailable actions
                 } else eb.addField("No units", "Build some in the 🏙️ Cities tab.", false)
                 val unitChoices = units.map { u ->
                     val code = window.code(u.getTile().position.x, u.getTile().position.y) ?: "off-map"
@@ -413,7 +415,7 @@ object Panel {
                     file = mapFile(game, civ, st, game.tileMap[center.x, center.y], Overlay(selectedTile = inspectTile), window)
                     if (inspectTile != null) {
                         val (title, body) = Features.inspect(inspectTile, civ, window.code(inspectTile.position.x, inspectTile.position.y) ?: "tile")
-                        eb.addField(title, body.take(1024), false)
+                        eb.addField(title, (body + UnitsPlus.inspectReach(civ, st, inspectTile)).take(1024), false)
                     } else eb.addField("🗺️ Map", "Pan with the arrows, 🔍 **Inspect** a tile by its code, or 🏠 jump back home.", false)
                 }
                 fun pan(clock: Int, arrow: String) = Button.secondary(id(gid, "pan", clock.toString()), arrow).withDisabled(st.wholeMap)
