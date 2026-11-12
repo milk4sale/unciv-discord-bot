@@ -53,7 +53,11 @@ import java.util.zip.ZipOutputStream
  *    `action:remove name:<mod>` (Manage Server).
  *  - `/civ map action:upload file:<map file> [name:]` (Manage Server) stores a map made in Unciv's map editor in
  *    `<unciv>/android/assets/maps/`; `action:list`; `action:remove name:<map>` (Manage Server).
+ *  - `/civ mod action:browse query:<text>` searches GitHub for repositories with the `unciv-mod` topic (as Unciv's mod
+ *    manager does) and lists them with an install hint (installing still needs Manage Server).
  *  - `/civ lobby add_mod: remove_mod: base: map: scenario: clear_mods:` (host, lobby only; no options = show).
+ *    `accept_mod_errors:True` lets a combination Unciv reports errors for start anyway (Unciv's AcceptModErrorsPopup);
+ *    `allow_export:True` lets the host export the save mid-game (SetupPlus).
  *
  * Settings: meta.settings.mods (extension mods), meta.settings.extra["baseRuleset" | "customMap" | "scenario"].
  * Scenarios are Unciv saved games shipped by mods in `<mod>/scenarios/` (same lookup as Unciv's NewGameScreen).
@@ -68,6 +72,10 @@ object ModsPlus : Extension {
     const val K_BASE = "baseRuleset"
     const val K_MAP = "customMap"
     const val K_SCENARIO = "scenario"
+    /** "true": the host accepted Unciv's mod-check errors for this lobby */
+    const val K_ACCEPT_ERRORS = "mo_acceptErrors"
+    /** How many error lines the accepted combination has (for the lobby warning) */
+    const val K_MOD_ERRORS = "mo_modErrors"
     private val DEFAULT_BASE = BaseRuleset.Civ_V_GnK.fullName
     private const val VERB_SELFTEST = "modsplus_selftest_ok"
 
@@ -92,6 +100,7 @@ object ModsPlus : Extension {
         modsDir(); mapsDir()
         val errors = RulesetCache.loadRulesets(noMods = false)
         refreshCatalogE()
+        SetupPlus.clearRulesCache()
         return errors
     }
 
@@ -441,8 +450,19 @@ object ModsPlus : Extension {
 
     // ================================================================== lobby choices
 
-    /** Engine thread. Throws PlayerError for impossible combos, returns warnings. */
-    fun checkRulesE(base: String?, mods: Collection<String>): List<String> {
+    /** Unciv's "Error:" lines of a mod check, without the severity prefix noise. */
+    private fun errorLines(list: com.unciv.models.ruleset.validation.RulesetErrorList) =
+        list.getErrorText().lines().filter { it.startsWith("Error") }
+
+    /** Engine thread. Error lines Unciv reports for this combination (empty = none); throws if it can't even be loaded. */
+    fun modErrorsE(base: String?, mods: Collection<String>): List<String> {
+        val (rs, errors) = RulesetCache.checkCombinedModLinks(LinkedHashSet(mods), base ?: DEFAULT_BASE)
+        if (rs == null) throw PlayerError("These mods can't be loaded together at all (accepting errors can't fix that):\n" + errors.getErrorText().take(600))
+        return if (errors.isError()) errorLines(errors) else emptyList()
+    }
+
+    /** Engine thread. Throws PlayerError for impossible combos (unless [acceptErrors] and they're only Unciv's mod-check errors), returns warnings. */
+    fun checkRulesE(base: String?, mods: Collection<String>, acceptErrors: Boolean = false): List<String> {
         val baseName = base ?: DEFAULT_BASE
         val baseRs = RulesetCache[baseName] ?: throw PlayerError("Base ruleset **$baseName** isn't installed.")
         if (!baseRs.modOptions.isBaseRuleset) throw PlayerError("**$baseName** isn't a base ruleset — add it with `add_mod:` instead.")
@@ -456,15 +476,23 @@ object ModsPlus : Extension {
             if (!ModCompatibility.meetsAllRequirements(rs, baseRs, ext))
                 throw PlayerError("Mod **${rs.name}** is incompatible with the other selected mods (or needs a mod that isn't selected).")
         }
-        val (_, errors) = RulesetCache.checkCombinedModLinks(LinkedHashSet(mods), baseName)
-        if (errors.isError()) throw PlayerError("Unciv says this mod combination is broken:\n" +
-            errors.getErrorText().lines().filter { it.startsWith("Error") }.take(4).joinToString("\n").take(800))
+        val (loaded, errors) = RulesetCache.checkCombinedModLinks(LinkedHashSet(mods), baseName)
+        if (loaded == null) throw PlayerError("These mods can't be loaded together at all (accepting errors can't fix that):\n" + errors.getErrorText().take(600))
+        if (errors.isError()) {
+            val lines = errorLines(errors)
+            val shown = lines.take(6).joinToString("\n").take(900) + if (lines.size > 6) "\n… +${lines.size - 6} more" else ""
+            if (!acceptErrors) throw PlayerError("Unciv says this mod combination is broken (${lines.size} error(s)):\n$shown\n" +
+                "To play anyway, as Unciv's *Accept* button allows, repeat the command with `accept_mod_errors:True` — the game may crash or misbehave.")
+            return listOf("🚨 **You accepted ${lines.size} known mod error(s)** — Unciv says the game may crash or behave oddly:\n$shown")
+        }
         return if (errors.isWarnUser()) listOf("⚠️ Unciv reports warnings for this combination — it should play, but don't expect everything to be perfect.") else emptyList()
     }
 
     class LobbyChange(val addMod: String? = null, val removeMod: String? = null, val base: String? = null,
-                      val map: String? = null, val scenario: String? = null, val clearMods: Boolean = false) {
-        val empty get() = addMod == null && removeMod == null && base == null && map == null && scenario == null && !clearMods
+                      val map: String? = null, val scenario: String? = null, val clearMods: Boolean = false,
+                      val acceptErrors: Boolean? = null, val allowExport: Boolean? = null) {
+        val empty get() = addMod == null && removeMod == null && base == null && map == null && scenario == null && !clearMods &&
+            acceptErrors == null && allowExport == null
     }
 
     /** Validates and applies a lobby change. NOT on the engine thread. */
@@ -477,6 +505,7 @@ object ModsPlus : Extension {
         var base = st.extra[K_BASE]?.takeIf { !isDefaultWord(it) }
         var mapName = st.extra[K_MAP]?.takeIf { !isDefaultWord(it) }
         var scenario = st.extra[K_SCENARIO]?.takeIf { !isDefaultWord(it) }
+        val accept = ch.acceptErrors ?: (st.extra[K_ACCEPT_ERRORS] == "true")
         val notes = ArrayList<String>()
         if (ch.clearMods) { mods.clear(); base = null }
         if (ch.addMod != null) {
@@ -504,12 +533,12 @@ object ModsPlus : Extension {
             if (base == null && mapBase != DEFAULT_BASE) { base = mapBase; notes += "Map **$mapName** uses base rules **$mapBase** — selected them." }
             val added = mapExt.filter { it !in mods }
             if (added.isNotEmpty()) { mods += added; notes += "Map **$mapName** needs ${added.joinToString { "**$it**" }} — added." }
-            notes += checkRulesE(base, mods)
+            notes += checkRulesE(base, mods, accept)
             val rs = RulesetCache.getComplexRuleset(mods, base ?: DEFAULT_BASE)
             val inc = map.getRulesetIncompatibility(rs)
             if (inc.isNotEmpty()) throw PlayerError("Map **$mapName** doesn't work with these rules: ${inc.take(4).joinToString("; ")}")
             mapFitProblemE(mapName, map, rs, majors, st.cityStates)?.let { throw PlayerError(it) }
-        } else notes += checkRulesE(base, mods)
+        } else notes += checkRulesE(base, mods, accept)
         if (scenario != null) {
             val sc = findScenario(scenario) ?: throw PlayerError("Scenario **$scenario** isn't installed anymore.")
             val game = loadScenarioE(sc)
@@ -520,10 +549,17 @@ object ModsPlus : Extension {
                 "map/mod/AI settings are ignored. Playable civs: ${playable.joinToString { it.civID }}."
         }
 
+        val errorCount = if (accept) modErrorsE(base, mods).size else 0
+        if (ch.acceptErrors == true && errorCount == 0) notes += "ℹ️ `accept_mod_errors` is on, but Unciv reports no errors for the current mods."
         st.mods = ArrayList(mods)
         fun put(k: String, v: String?) { if (v == null) st.extra.remove(k) else st.extra[k] = v }
         put(K_BASE, base); put(K_MAP, mapName); put(K_SCENARIO, scenario)
-        return (listOf("✅ Lobby updated.") + lobbyLines(meta).ifEmpty { listOf("Standard rules on a generated map.") } + notes).joinToString("\n")
+        put(K_ACCEPT_ERRORS, if (accept) "true" else null); put(K_MOD_ERRORS, errorCount.takeIf { it > 0 }?.toString())
+        ch.allowExport?.let { SetupPlus.setAllowExport(meta, it) }
+        // difficulty / speed / era / victories / nations the new rules don't have go back to defaults
+        notes += SetupPlus.normalizeE(meta)
+        return (listOf("✅ Lobby updated.") + lobbyLines(meta).ifEmpty { listOf("Standard rules on a generated map.") } +
+            SetupPlus.lobbyLines(meta).filter { it.startsWith("💾") } + notes).joinToString("\n")
     }
 
     override fun lobbyLines(meta: GameMeta): List<String> {
@@ -535,6 +571,9 @@ object ModsPlus : Extension {
         if (scenario == null && (base != null || st.mods.isNotEmpty()))
             out += "🧩 Rules: ${base ?: "Gods & Kings"}" + (if (st.mods.isNotEmpty()) " + ${st.mods.joinToString()}" else "")
         st.extra[K_MAP]?.takeIf { !isDefaultWord(it) && scenario == null }?.let { out += "🗺️ Custom map: **$it** (map size/type ignored)" }
+        st.extra[K_MOD_ERRORS]?.takeIf { st.extra[K_ACCEPT_ERRORS] == "true" && scenario == null }?.let {
+            out += "🚨 **Mod errors accepted by the host** ($it error(s) Unciv reports) — the game may crash or misbehave"
+        }
         return out
     }
 
@@ -566,7 +605,15 @@ object ModsPlus : Extension {
             if (map == null) { setup.mapParameters.mods = LinkedHashSet(mods); setup.mapParameters.baseRuleset = gp.baseRuleset }
             val rs = RulesetCache.getComplexRuleset(gp)
             // GameOps filled these from the vanilla ruleset; make them valid for the modded one
-            gp.victoryTypes = ArrayList(st.victoryTypes.filter { it in rs.victories }.ifEmpty { rs.victories.keys.toList() })
+            // like NewGameScreen: refuse Unciv's mod-check errors unless the host accepted them (they're recorded in the game)
+            val (_, check) = RulesetCache.checkCombinedModLinks(LinkedHashSet(mods), gp.baseRuleset)
+            if (check.isError()) {
+                if (st.extra[K_ACCEPT_ERRORS] != "true") throw PlayerError("Unciv reports errors for these mods (were they updated?):\n" +
+                    errorLines(check).take(4).joinToString("\n").take(700) + "\nThe host can start anyway with `/civ lobby accept_mod_errors:True`.")
+                gp.acceptedModCheckErrors = check.getErrorText()
+            }
+            gp.victoryTypes = ArrayList(st.victoryTypes.filter { it in rs.victories }.ifEmpty { rs.selectableVictories().map { it.name } })
+            if (gp.speed !in rs.speeds) gp.speed = listOf("Quick", "Standard").firstOrNull { it in rs.speeds } ?: rs.speeds.keys.firstOrNull() ?: gp.speed
             gp.startingEra = st.startEra.takeIf { it in rs.eras } ?: gp.startingEra.takeIf { it in rs.eras } ?: rs.eras.keys.firstOrNull() ?: gp.startingEra
             if (gp.difficulty !in rs.difficulties) gp.difficulty = rs.difficulties.keys.elementAtOrNull(rs.difficulties.size / 2) ?: gp.difficulty
             val pickable = rs.nations.values.filter { it.isMajorCiv && !it.hasUnique(UniqueType.WillNotBeChosenForNewGames) }
@@ -587,11 +634,13 @@ object ModsPlus : Extension {
     // ================================================================== Discord commands
 
     override fun commands(): List<SubcommandData> = listOf(
-        SubcommandData("mod", "Unciv mods on this server: list, install from GitHub, remove").addOptions(
+        SubcommandData("mod", "Unciv mods: list, browse GitHub, install from GitHub, remove").addOptions(
             OptionData(OptionType.STRING, "action", "What to do", true)
-                .addChoice("list installed mods", "list").addChoice("install from GitHub (Manage Server)", "install").addChoice("remove (Manage Server)", "remove"),
+                .addChoice("list installed mods", "list").addChoice("browse Unciv mods on GitHub", "browse")
+                .addChoice("install from GitHub (Manage Server)", "install").addChoice("remove (Manage Server)", "remove"),
             OptionData(OptionType.STRING, "url", "install: https://github.com/<owner>/<repo>"),
             OptionData(OptionType.STRING, "name", "remove: the mod's name").setAutoComplete(true),
+            OptionData(OptionType.STRING, "query", "browse: words to search for (empty = most-starred mods)"),
         ),
         SubcommandData("map", "Custom maps made in Unciv's map editor: list, upload, remove").addOptions(
             OptionData(OptionType.STRING, "action", "What to do", true)
@@ -606,6 +655,8 @@ object ModsPlus : Extension {
             OptionData(OptionType.STRING, "map", "Custom map name, or 'generated'").setAutoComplete(true),
             OptionData(OptionType.STRING, "scenario", "Scenario from an installed mod, or 'none'").setAutoComplete(true),
             OptionData(OptionType.BOOLEAN, "clear_mods", "Remove all selected mods and the base ruleset"),
+            OptionData(OptionType.BOOLEAN, "accept_mod_errors", "Start even though Unciv reports errors in these mods (may crash)"),
+            OptionData(OptionType.BOOLEAN, "allow_export", "Let the host export the save mid-game (it shows the whole map)"),
         ),
     )
 
@@ -662,8 +713,78 @@ object ModsPlus : Extension {
                 val name = event.getOption("name")?.asString ?: return event.reply("Add `name:<mod>`.").setEphemeral(true).queue()
                 event.deferReply().queue { hook -> work(hook, bot) { removeMod(name, bot.store) } }
             }
+            "browse" -> {
+                val q = event.getOption("query")?.asString.orEmpty()
+                event.deferReply(true).queue { hook -> work(hook, bot) { browseText(q) } }
+            }
             else -> event.reply(clip(modListText())).setEphemeral(true).queue()
         }
+    }
+
+    // ---- GitHub mod catalogue (Unciv's mod manager: repositories with the "unciv-mod" topic, sorted by stars)
+
+    class ModSearchHit(val fullName: String, val url: String, val description: String, val stars: Int, val updated: String)
+
+    private val searchHttp: HttpClient by lazy {
+        HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).connectTimeout(Duration.ofSeconds(6)).build()
+    }
+
+    /** The GitHub search query Unciv uses (GithubAPI.fetchGithubReposWithTopic): "<search> topic:unciv-mod fork:true". */
+    fun searchQuery(text: String): String {
+        val q = text.replace(Regex("[\\r\\n\\t]"), " ").trim().take(100)
+        return (if (q.isEmpty()) "" else "$q ") + "topic:unciv-mod fork:true"
+    }
+
+    fun parseModSearch(body: String): Pair<Int, List<ModSearchHit>> {
+        val root = JsonReader().parse(body)
+        val items = root.get("items") ?: return 0 to emptyList()
+        val out = ArrayList<ModSearchHit>()
+        var node = items.child
+        while (node != null) {
+            val name = node.getString("full_name", null)
+            val url = node.getString("html_url", null)
+            if (name != null && url != null && url.startsWith("https://github.com/"))
+                out += ModSearchHit(name, url, node.get("description")?.takeIf { d -> d.isString }?.asString().orEmpty(), node.getInt("stargazers_count", 0),
+                    node.getString("pushed_at", "").take(10))
+            node = node.next
+        }
+        return root.getInt("total_count", out.size) to out
+    }
+
+    /** NOT on the engine thread (network, 10 s). Throws PlayerError when GitHub can't be asked. */
+    fun searchGithubMods(text: String, perPage: Int = 10): Pair<Int, List<ModSearchHit>> {
+        val url = "https://api.github.com/search/repositories?q=" + java.net.URLEncoder.encode(searchQuery(text), Charsets.UTF_8) +
+            "&sort=stars&order=desc&per_page=$perPage"
+        val resp = try {
+            searchHttp.send(HttpRequest.newBuilder(URI(url)).timeout(Duration.ofSeconds(10)).header("User-Agent", "CivBot-Unciv-mod-browser")
+                .header("Accept", "application/vnd.github+json").GET().build(), HttpResponse.BodyHandlers.ofString())
+        } catch (e: Exception) {
+            throw PlayerError("Couldn't reach GitHub (${e.javaClass.simpleName}${e.message?.let { ": ${it.take(80)}" } ?: ""}). Try again later, or browse <https://github.com/topics/unciv-mod>.")
+        }
+        return when (resp.statusCode()) {
+            200 -> parseModSearch(resp.body())
+            403, 429 -> throw PlayerError("GitHub's search limit was reached — try again in a minute, or browse <https://github.com/topics/unciv-mod>.")
+            422 -> throw PlayerError("GitHub didn't accept that search — try simpler words.")
+            else -> throw PlayerError("GitHub answered HTTP ${resp.statusCode()} — try again later.")
+        }
+    }
+
+    fun browseText(query: String, search: (String) -> Pair<Int, List<ModSearchHit>> = { searchGithubMods(it) }): String {
+        val (total, hits) = try { search(query) } catch (e: PlayerError) { return "❌ ${e.message}" }
+        val what = if (query.isBlank()) "the most-starred Unciv mods" else "Unciv mods matching **${query.trim().take(100)}**"
+        if (hits.isEmpty()) return "🔎 No GitHub repositories with the `unciv-mod` topic match **${query.trim().take(100)}**. Try other words, or browse <https://github.com/topics/unciv-mod>."
+        val installed = installedMods.mapNotNull { it.source?.lowercase() }.toSet()
+        val sb = StringBuilder("🔎 $what on GitHub ($total found, top ${hits.size} by ⭐):\n")
+        for (h in hits) {
+            val line = "• **${h.fullName}** ⭐${h.stars}" + (if (h.updated.isNotEmpty()) " · updated ${h.updated}" else "") +
+                (if (h.url.lowercase() in installed) " · ✅ installed" else "") +
+                (if (h.description.isNotBlank()) "\n  ${h.description.replace("\n", " ").take(140)}" else "") +
+                "\n  `/civ mod action:install url:${h.url}`\n"
+            if (sb.length + line.length > 1800) break
+            sb.append(line)
+        }
+        sb.append("Installing needs **Manage Server**. Mods are code-free JSON rule sets, but only install ones you trust.")
+        return sb.toString()
     }
 
     private fun mapCommand(event: SlashCommandInteractionEvent, bot: BotApi) {
@@ -710,13 +831,16 @@ object ModsPlus : Extension {
         val ch = LobbyChange(
             addMod = event.getOption("add_mod")?.asString, removeMod = event.getOption("remove_mod")?.asString,
             base = event.getOption("base")?.asString, map = event.getOption("map")?.asString,
-            scenario = event.getOption("scenario")?.asString, clearMods = event.getOption("clear_mods")?.asBoolean == true)
+            scenario = event.getOption("scenario")?.asString, clearMods = event.getOption("clear_mods")?.asBoolean == true,
+            acceptErrors = event.getOption("accept_mod_errors")?.asBoolean, allowExport = event.getOption("allow_export")?.asBoolean)
         if (ch.empty) {
             val cur = lobbyLines(meta).ifEmpty { listOf("Standard Gods & Kings rules on a generated map.") }
             val avail = "**Mods:** ${installedMods.filter { !it.isBase }.joinToString { it.name }.ifEmpty { "none installed" }}\n" +
                 "**Base rulesets:** ${baseRulesets.joinToString()}\n**Maps:** ${mapNames().joinToString().ifEmpty { "none uploaded" }}\n" +
                 "**Scenarios:** ${scenarioList.joinToString { it.key }.ifEmpty { "none (they come inside mods)" }}"
-            return event.reply(clip("⚙️ **${meta.name}**\n${cur.joinToString("\n")}\n\n$avail\n\nThe host changes these with `/civ lobby add_mod: remove_mod: base: map: scenario:`."))
+            return event.reply(clip("⚙️ **${meta.name}**\n${cur.joinToString("\n")}\n\n$avail\n\nThe host changes these with `/civ lobby add_mod: remove_mod: base: map: scenario:` " +
+                "(`accept_mod_errors:True` to play a combination Unciv reports errors for; `allow_export:True` lets the host export mid-game — " +
+                "currently ${if (meta.settings.extra[SetupPlus.K_ALLOW_EXPORT] == "true") "on" else "off"})."))
                 .setEphemeral(true).queue()
         }
         if (meta.hostId != event.user.id) return event.reply("Only the host (<@${meta.hostId}>) can change the game's mods, map or scenario.").setEphemeral(true).queue()
@@ -777,6 +901,7 @@ object ModsPlus : Extension {
         val home = File(System.getProperty("civbot.home") ?: ".")
         val work = File(home, "selftest-out/modsplus").apply { deleteRecursively(); mkdirs() }
         val testMod = "CivBot Test Mod"; val rivalMod = "CivBot Test Rival"; val testMap = "CivBot Test Map"
+        val listsMod = "CivBot Lists Mod"; val brokenMod = "CivBot Broken Mod"
         var githubMod: String? = null
         fun ok(label: String) { t.act(t.alice, VERB_SELFTEST, emptyList(), label, label) }
         fun step(label: String, block: () -> Unit) {
@@ -909,6 +1034,81 @@ object ModsPlus : Extension {
                     check(Engine.withGame(g) { it.turns } > before && Engine.withGame(g) { it.currentPlayerCiv.isHuman() })
                 }
             }
+            // --- lobby lists follow the selected mods; hidden nations; accepted mod errors; GitHub catalogue
+            val listsZip = File(work, "lists.zip")
+            zipOf(listsZip, mapOf(
+                "jsons/ModOptions.json" to "{}",
+                "jsons/Speeds.json" to """[{"name":"CivBot Blitz","modifier":0.5,"turns":[{"yearsPerTurn":50,"untilTurn":1000}]}]""",
+                "jsons/Difficulties.json" to """[{"name":"CivBot Easy","baseHappiness":15,"aiDifficultyLevel":"Chieftain"}]""",
+                "jsons/VictoryTypes.json" to """[{"name":"CivBot Victory","milestones":["Capture all capitals"]}]""",
+                "jsons/Nations.json" to """[{"name":"CivBot Visible","leaderName":"Ada Test","uniqueName":"Test Spirit","uniqueText":"Nothing special, just for the self-test",
+                    "outerColor":[10,20,30],"innerColor":[200,210,220],"cities":["Visa","Vista","Vigo"]},
+                    {"name":"CivBot Hidden","leaderName":"Nobody","uniques":["Will not be chosen for new games"],"outerColor":[1,2,3],"innerColor":[4,5,6],"cities":["Hidden City"]}]"""))
+            val brokenZip = File(work, "broken.zip")
+            zipOf(brokenZip, mapOf("jsons/ModOptions.json" to "{}",
+                "jsons/Difficulties.json" to """[{"name":"CivBot Broken","researchCostModifier":-1,"aiDifficultyLevel":"Chieftain"}]"""))
+            step("lobby lists: difficulties, speeds, victories and nations come from the mods") {
+                installFromZip(listsZip, listsMod, null)
+                val m = fakeMeta("mp6")
+                check("CivBot Blitz" !in SetupPlus.rules(m).speeds)
+                updateLobby(m, LobbyChange(addMod = listsMod))
+                val r = SetupPlus.rules(m)
+                check("CivBot Blitz" in r.speeds && "CivBot Easy" in r.difficulties && "CivBot Victory" in r.victories) { "${r.speeds} ${r.difficulties} ${r.victories}" }
+                val vis = r.nation("CivBot Visible")
+                check(vis != null && vis.description.contains("Ada Test") && vis.description.contains("Test Spirit") && vis.description.length <= 100) { vis?.description.toString() }
+                println("  [ModsPlus] modded lists: speeds ${r.speeds}, difficulties ${r.difficulties.size}, victories ${r.victories}; CivBot Visible = ${vis.description}")
+            }
+            step("lobby lists: nations marked 'Will not be chosen for new games' are hidden") {
+                val m = fakeMeta("mp6").apply { settings.mods.add(listsMod) }
+                check(SetupPlus.rules(m).nation("CivBot Hidden") == null && Engine.run { GameOps.majorNations(m) }.none { it == "CivBot Hidden" })
+                val opts = SetupPlus.nationPickerRows(m, "902").flatMap { row -> row.components.filterIsInstance<net.dv8tion.jda.api.interactions.components.selections.StringSelectMenu>().flatMap { it.options } }
+                check(opts.any { it.value == "CivBot Visible" } && opts.none { it.value == "CivBot Hidden" })
+                check(SetupPlus.nationDetails(m, "CivBot Visible").description!!.contains("Nothing special"))
+            }
+            step("lobby lists: modded speed + difficulty + victory used by the game; reset when the mod goes") {
+                val m = fakeMeta("mp7").apply { settings.speed = "CivBot Blitz"; settings.difficulty = "CivBot Easy"; settings.victoryTypes = arrayListOf("CivBot Victory", "Domination") }
+                updateLobby(m, LobbyChange(addMod = listsMod))
+                check(m.settings.speed == "CivBot Blitz" && m.settings.difficulty == "CivBot Easy")
+                val g = t.eng { GameOps.startGame(m) }
+                val gp = g.gameParameters
+                check(gp.speed == "CivBot Blitz" && gp.difficulty == "CivBot Easy" && "CivBot Victory" in gp.victoryTypes) { "${gp.speed} ${gp.difficulty} ${gp.victoryTypes}" }
+                val txt = updateLobby(m, LobbyChange(removeMod = listsMod))
+                check(m.settings.speed == "Quick" && m.settings.difficulty == "Prince" && m.settings.victoryTypes == listOf("Domination")) { "${m.settings.speed} ${m.settings.difficulty} ${m.settings.victoryTypes}" }
+                println("  [ModsPlus] " + txt.lines().filter { it.startsWith("⚖️") || it.startsWith("⏱️") || it.startsWith("🏆") }.joinToString(" | "))
+            }
+            expectError("mods: errors refused unless accept_mod_errors", "accept_mod_errors") {
+                installFromZip(brokenZip, brokenMod, null)
+                updateLobby(fakeMeta("mp8"), LobbyChange(addMod = brokenMod))
+            }
+            step("mods: accept_mod_errors starts the game anyway (errors shown + recorded)") {
+                val m = fakeMeta("mp8")
+                val txt = updateLobby(m, LobbyChange(addMod = brokenMod, acceptErrors = true))
+                check(txt.contains("accepted") && brokenMod in m.settings.mods) { txt }
+                check(lobbyLines(m).any { it.startsWith("🚨") }) { lobbyLines(m).toString() }
+                val g = t.eng { GameOps.startGame(m) }
+                check(g.gameParameters.acceptedModCheckErrors.contains("CivBot Broken")) { g.gameParameters.acceptedModCheckErrors }
+                val off = try { updateLobby(m, LobbyChange(acceptErrors = false)); null } catch (e: PlayerError) { e.message }
+                check(off?.contains("broken") == true && m.settings.extra[K_ACCEPT_ERRORS] == "true") { "turning it off: $off" }
+                updateLobby(m, LobbyChange(removeMod = brokenMod, acceptErrors = false))
+                check(lobbyLines(m).none { it.startsWith("🚨") } && m.settings.extra[K_ACCEPT_ERRORS] == null)
+                println("  [ModsPlus] accepted errors: ${g.gameParameters.acceptedModCheckErrors.lines().first().take(150)}")
+            }
+            step("mods: GitHub catalogue (canned search reply)") {
+                val body = """{"total_count":2,"items":[{"full_name":"a/b","html_url":"https://github.com/a/b","description":"Test mod","stargazers_count":5,"pushed_at":"2026-01-02T00:00:00Z"},
+                    {"full_name":"c/d","html_url":"https://github.com/c/d","description":null,"stargazers_count":1},{"full_name":"evil","html_url":"https://evil.example/x"}]}"""
+                val (n, hits) = parseModSearch(body)
+                check(n == 2 && hits.size == 2 && hits[0].description == "Test mod" && hits[1].description == "" && hits[0].updated == "2026-01-02")
+                val txt = browseText("test") { parseModSearch(body) }
+                check(txt.contains("/civ mod action:install url:https://github.com/a/b") && txt.contains("Manage Server") && !txt.contains("evil")) { txt }
+                check(searchQuery("  wonders\n") == "wonders topic:unciv-mod fork:true" && searchQuery("") == "topic:unciv-mod fork:true")
+                check(browseText("x") { throw PlayerError("Couldn't reach GitHub") }.startsWith("❌"))
+                check(browseText("zz") { 0 to emptyList() }.contains("No GitHub repositories"))
+            }
+            step("mods: browse GitHub for Unciv mods (live search; network may fail)") {
+                val txt = browseText("religion")
+                check(txt.startsWith("🔎") || txt.startsWith("❌")) { txt }
+                println("  [ModsPlus] live browse: " + (if (txt.startsWith("❌")) "GitHub unavailable, handled: " else "") + txt.lines().take(3).joinToString(" | ").take(300))
+            }
             // --- removal
             expectError("mods: remove refused while a game uses it", "is used by") {
                 val s = Session(lobby.apply { id = "mp1x" }, null)
@@ -925,7 +1125,7 @@ object ModsPlus : Extension {
             failures += "setup: ${e.javaClass.simpleName}: ${e.message}"; e.printStackTrace()
         } finally {
             // leave the install exactly as we found it
-            for (n in listOfNotNull(testMod, rivalMod, githubMod)) File(modsDir(), n).takeIf { it.exists() }?.deleteRecursively()
+            for (n in listOfNotNull(testMod, rivalMod, githubMod, listsMod, brokenMod)) File(modsDir(), n).takeIf { it.exists() }?.deleteRecursively()
             File(mapsDir(), testMap).delete()
             runCatching { Engine.run { reloadE() } }
             selfTesting = false

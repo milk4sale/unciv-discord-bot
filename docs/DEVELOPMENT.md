@@ -47,7 +47,7 @@ Most features beyond the basics live in **extension objects**, one file each, re
 | `CityPlus.kt` | 👥 Citizens, 🏗️ Production (queue editing, buying, details), 🏙️ Cities overview and 🏛️ Wonders tabs, sell, rename, worker queue, ↩️ undo |
 | `UnitsPlus.kt` | swap, group move, destinations, promotion paths and defaults, disband confirm, upgrade all, AutoPlay once, 📰 News tab, end-turn checklist extras |
 | `DiplomacyPlus.kt` | war confirmation and peace lock, two-sided treaties, 🧭 Relations tab, player demands, custom deal amounts, city-state details, gifts and marriage |
-| `SetupPlus.kt` | `/civ setup` (all remaining game options), `/civ save export` / `import` |
+| `SetupPlus.kt` | `/civ setup` (all remaining game options, custom map size, Random map pool), lobby lists from the ruleset + nation picker, `/civ save export` / `import`, turn history + `/civ rollback` |
 | `MilitaryPlus.kt` | 🎖️ Military tab, nukes with blast preview and confirm, air sweep / strike / rebase |
 | `StatecraftPlus.kt` | 🕵️ Espionage, 🗳️ World Congress, 📨 Inbox (incl. random events), 🔬 Research queue and ⛪ Found religion tabs, policy branch progress, `/civ espionage` |
 | `InfoPlus.kt` (+ `InfoPlusStats.kt`) | 🏆 Victory, 📖 Civilopedia, ✨ Beliefs, 📊 Stats (breakdowns, demographics, charts…) and 🎞️ Replay tabs, ranking privacy, `/civ wiki` |

@@ -100,7 +100,7 @@ walks you through it with every click.
 | `/civ kick @player` · `/civ host @player` · `/civ end` | host tools |
 | `/civ lobby …` · `/civ espionage` | host: pick mods, base rules, custom map, scenario; turn spies on |
 | `/civ setup …` | host: every other Unciv game option (map shape, resources, sea level, max turns, One City Challenge, nukes, AI nations, more AIs…) |
-| `/civ save export` · `/civ save import` | download a game to keep playing in desktop Unciv · start a lobby from an Unciv save |
+| `/civ save export` · `/civ save import` | download a game to keep playing in desktop Unciv (once it has ended, or by the host with `allow_export`) · start a lobby from an Unciv save |
 | `/civ mod …` · `/civ map …` | list, install or remove Unciv mods (from GitHub) and custom maps (Manage Server) |
 | `/civ wiki query:…` | Civilopedia lookup for anyone |
 | `/civ help` | in-Discord quick guide |

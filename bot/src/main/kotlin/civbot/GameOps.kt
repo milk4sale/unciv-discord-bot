@@ -70,7 +70,8 @@ object GameOps {
                 com.unciv.models.ruleset.RulesetCache.getComplexRuleset(LinkedHashSet(meta.settings.mods), meta.settings.extra["baseRuleset"] ?: base)
             else com.unciv.models.ruleset.RulesetCache[base]!!
         } catch (_: Exception) { com.unciv.models.ruleset.RulesetCache[base]!! }
-        return rs.nations.values.filter { it.isMajorCiv }.map { it.name }.sorted()
+        // like Unciv's player picker: nations marked "Will not be chosen for new games" aren't offered
+        return rs.nations.values.filter { it.isMajorCiv && !it.hasUnique(com.unciv.models.ruleset.unique.UniqueType.WillNotBeChosenForNewGames) }.map { it.name }.sorted()
     }
 
     fun startGame(meta: GameMeta): GameInfo {
