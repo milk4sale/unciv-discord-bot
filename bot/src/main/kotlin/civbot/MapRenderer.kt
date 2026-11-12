@@ -303,6 +303,7 @@ object MapRenderer {
             g.stroke = BasicStroke((1.8 * scale).toFloat())
             g.draw(hexPath(p.first, p.second, r * 0.9))
         }
+        overlay.selectedUnit?.let { drawDestination(g, it, positions, r, scale) }
 
         // Units
         for ((tile, cx, cy) in ordered) {
@@ -350,6 +351,28 @@ object MapRenderer {
         }
         g.dispose()
         return ByteArrayOutputStream().also { ImageIO.write(img, "png", it) }.toByteArray()
+    }
+
+    /** Path + marker to where the selected unit is heading (Unciv: getMovementDestination / road destination). */
+    private fun drawDestination(g: Graphics2D, u: MapUnit, positions: Map<Tile, Pair<Double, Double>>, r: Double, scale: Int) {
+        val dest = UnitsPlus.destinationOf(u) ?: return
+        val start = positions[u.getTile()] ?: return
+        val (wx0, wy0) = worldOf(u.getTile().position.x, u.getTile().position.y)
+        fun at(t: Tile): Pair<Double, Double> = positions[t] ?: worldOf(t.position.x, t.position.y).let { (wx, wy) ->
+            Pair(start.first + (wx - wx0) * r, start.second - (wy - wy0) * r) }
+        val path = (listOf(u.getTile()) + (runCatching { u.movement.getShortestPath(dest) }.getOrNull().orEmpty().ifEmpty { listOf(dest) }))
+        val line = Path2D.Double()
+        path.forEachIndexed { i, t -> val (x, y) = at(t); if (i == 0) line.moveTo(x, y) else line.lineTo(x, y) }
+        g.stroke = BasicStroke((1.4 * scale).toFloat(), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 1f, floatArrayOf((3f * scale), (2.5f * scale)), 0f)
+        g.color = Color(0, 0, 0, 150); g.draw(line)
+        g.stroke = BasicStroke((0.8 * scale).toFloat(), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 1f, floatArrayOf((3f * scale), (2.5f * scale)), 0f)
+        g.color = Color(120, 230, 255, 235); g.draw(line)
+        val (dx, dy) = at(dest)
+        g.stroke = BasicStroke((1.8 * scale).toFloat())
+        g.color = Color(120, 230, 255)
+        g.draw(hexPath(dx, dy, r * 0.8))
+        val m = r * 0.18
+        g.fillOval((dx - m).toInt(), (dy - m).toInt(), (2 * m).toInt(), (2 * m).toInt())
     }
 
     private fun drawUnit(g: Graphics2D, unit: MapUnit, cx: Double, cy: Double, r: Double, scale: Int, selected: Boolean) {

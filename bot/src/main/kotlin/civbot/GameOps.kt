@@ -194,7 +194,7 @@ object GameOps {
     }
 
     /** Move toward [target]; multi-turn moves keep going automatically on later turns. */
-    fun moveUnit(u: MapUnit, target: Tile): String {
+    fun moveUnit(u: MapUnit, target: Tile, allowSwap: Boolean = true): String {
         if (target == u.getTile()) return "Already there."
         if (!u.hasMovement()) throw PlayerError("${u.label()} has no moves left this turn.")
         val enemy = target.getUnits().firstOrNull { it.civ != u.civ && u.civ.isAtWarWith(it.civ) }
@@ -203,6 +203,8 @@ object GameOps {
             attackableTargets(u).firstOrNull { it.tileToAttack == target }?.let { return attack(u, it) }
             throw PlayerError("There's an enemy there. Use **Attack** from the actions menu when in range.")
         }
+        // Own unit of the same kind there: swap places (Unciv: canUnitSwapTo / swapMoveToTile)
+        if (allowSwap) UnitsPlus.trySwap(u, target)?.let { return it }
         val step = try { u.movement.getTileToMoveToThisTurn(target) } catch (e: Exception) {
             throw PlayerError("${u.label()} can't find a path there.")
         }
@@ -267,7 +269,7 @@ object GameOps {
             }
             out += Choice("atk:${t.tileToAttack.position.x},${t.tileToAttack.position.y}", "Attack $name", "Combat", "⚔️")
         }
-        if (u.promotions.canBePromoted())
+        if (u.promotions.canBePromoted() && u.hasMovement() && u.attacksThisTurn == 0) // Unciv: PromotionPickerScreen.canPromoteNow
             for (p in u.promotions.getAvailablePromotions()) out += Choice("promo:${p.name}", "Promote: ${p.name}", clean(p.uniques.joinToString("; ")).take(100), "⭐")
 
         // Engine actions that need no extra UI (found city, pillage, great people, religion, upgrades...)
@@ -328,7 +330,8 @@ object GameOps {
         if (road != null && u.civ.tech.getBestRoadAvailable() != com.unciv.logic.map.tile.RoadStatus.None && u.canBuildImprovement(road))
             out += Choice("ask:roadto", "Connect road to…", "Builds a road to a tile or city, over several turns", "🛣️")
         if (u.hasMovement()) out += Choice("skip", "Skip this turn", "", "⏭️")
-        out += Choice("disband", "Disband unit", "Removes the unit", "🗑️")
+        if (u.hasMovement()) out += Choice("disband", "Disband unit…", UnitsPlus.disbandText(u), "🗑️")
+        out.addAll(0, UnitsPlus.pendingDisbandChoices(u))
         return out.sortedBy { if (it.id == "do:cp_undo") 0 else 1 } // ↩️ Undo always first
     }
 
@@ -343,6 +346,7 @@ object GameOps {
             }
             id.startsWith("promo:") -> {
                 val p = id.removePrefix("promo:")
+                if (!u.hasMovement() || u.attacksThisTurn > 0) throw PlayerError("$name can only be promoted before attacking and while it has moves left.")
                 u.promotions.addPromotion(p)
                 return "⭐ $name promoted: **$p**."
             }
@@ -369,7 +373,7 @@ object GameOps {
             id == "escort" -> { u.startEscorting(); return "🤝 ${u.label()} and ${u.getOtherEscortUnit()?.label()} now move together." }
             id == "unescort" -> { u.stopEscorting(); return "↔️ Units move separately." }
             id == "cancelimp" -> { u.getTile().stopWorkingOnImprovement(); return "Stopped building." }
-            id == "wake" -> { u.action = null; u.automated = false; u.due = true; return "$name is awaiting orders." }
+            id == "wake" -> { u.action = null; u.automated = false; u.automatedRoadConnectionDestination = null; u.due = true; return "$name is awaiting orders." }
             id == "automate" -> {
                 u.automated = true
                 if (u.hasMovement()) UnitAutomation.automateUnitMoves(GameView(u.civ.gameInfo, u.civ).getMapUnitView(u))
@@ -385,7 +389,7 @@ object GameOps {
             id == "sleepheal" -> { u.action = UnitActionType.SleepUntilHealed.value; return "🩹 $name sleeps until healed." }
             id == "sleep" -> { u.action = UnitActionType.Sleep.value; return "💤 $name is sleeping." }
             id == "skip" -> { u.due = false; return "⏭️ $name skips this turn." }
-            id == "disband" -> { u.disband(); return "🗑️ $name disbanded." }
+            id == "disband" -> return UnitsPlus.armDisband(u)
         }
         Extensions.all.firstNotNullOfOrNull { it.doUnitChoice(u, id) }?.let { return it }
         throw PlayerError("Unknown action.")
@@ -607,6 +611,7 @@ object GameOps {
         if (noProd.isNotEmpty()) w += "Pick **production** in ${noProd.joinToString { it.name }}"
         val idle = civ.units.getCivUnits().count { it.due && it.isIdle() && it.hasMovement() }
         if (idle > 0) w += "**$idle** unit(s) still have orders to give"
+        w += UnitsPlus.extraTurnWarnings(civ)
         return w
     }
 
