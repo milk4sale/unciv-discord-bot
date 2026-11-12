@@ -97,7 +97,7 @@ class Controller(val store: Store) {
                     requireTurn(); val c = city(); val name = value!!.removePrefix("prod:")
                     st.flash += if (st.queueMode) {
                         if (c.isPuppet) throw PlayerError("Puppet cities choose their own production.")
-                        c.cityConstructions.addToQueue(name); "📋 Added **$name** to ${c.name}'s queue."
+                        GameOps.queueConstruction(c, name)
                     } else GameOps.setProduction(c, name)
                     changed = true
                 }

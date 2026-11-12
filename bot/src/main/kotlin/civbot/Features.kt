@@ -227,18 +227,23 @@ object Features {
     private val focusEmoji = mapOf(
         CityFocus.NoFocus to "⚖️", CityFocus.FoodFocus to "🍞", CityFocus.ProductionFocus to "⚙️", CityFocus.GoldFocus to "💰",
         CityFocus.ScienceFocus to "🔬", CityFocus.CultureFocus to "🎭", CityFocus.FaithFocus to "🙏",
+        CityFocus.GoldGrowthFocus to "📈", CityFocus.ProductionGrowthFocus to "🏭",
     )
 
     fun cityExtraChoices(city: City, window: MapWindow?): List<Choice> {
         val out = ArrayList<Choice>()
-        if (city.isPuppet) out += Choice("annex", "Annex this city", "Take control of production", "🏙️")
+        // Unciv's CityScreen: no annexing and no razing for civs that "May not annex cities"
+        val mayAnnex = GameOps.mayAnnex(city.civ)
+        if (city.isPuppet && mayAnnex) out += Choice("annex", "Annex this city", "Take control of production", "🏙️")
         if (city.isBeingRazed) out += Choice("stopraze", "Stop razing", "", "🧯")
-        else if (city.canBeDestroyed()) out += Choice("raze", "Raze this city", "Burns down over several turns", "🔥")
+        else if (city.canBeDestroyed() && mayAnnex) out += Choice("raze", "Raze this city", "Burns down over several turns", "🔥")
         if (city.cityConstructions.constructionQueue.size > 1) out += Choice("clearq", "Clear the build queue", "Keeps the current item", "🧹")
-        for ((focus, e) in focusEmoji) if (focus != city.getCityFocus())
+        // Same focus list as Unciv's CitizenManagementTable (tableEnabled, Faith only with religion on)
+        for ((focus, e) in focusEmoji) if (focus != city.getCityFocus() && focus.tableEnabled &&
+            (focus != CityFocus.FaithFocus || city.civ.gameInfo.isReligionEnabled()))
             out += Choice("focus:${focus.name}", "Focus: ${GameOps.focusName(focus)}", "Citizens favour this", e)
         val buyable = city.tilesInRange.filter { city.expansion.canBuyTile(it) }
-            .map { it to city.expansion.getGoldCostOfTile(it) }.sortedBy { it.second }.take(5)
+            .map { it to city.expansion.getGoldCostOfTile(it) }.sortedBy { it.second }
         for ((t, cost) in buyable) {
             val code = window?.code(t.position.x, t.position.y) ?: "${t.position.x},${t.position.y}"
             out += Choice("tile:${t.position.x},${t.position.y}", "Buy tile $code — $cost gold", GameOps.tileDescription(t, city.civ).take(100), "🗺️")
@@ -247,8 +252,12 @@ object Features {
     }
 
     fun doCityExtra(city: City, id: String): String = when {
-        id == "annex" -> { city.annexCity(); "🏙️ ${city.name} annexed." }
-        id == "raze" -> { if (city.isPuppet) city.annexCity(); city.isBeingRazed = true; "🔥 ${city.name} is being razed." }
+        id == "annex" -> GameOps.annex(city)
+        id == "raze" -> {
+            GameOps.requireMayAnnex(city.civ)
+            if (!city.canBeDestroyed()) throw PlayerError("${city.name} can't be razed (capitals and holy cities can't).")
+            if (city.isPuppet) city.annexCity(); city.isBeingRazed = true; "🔥 ${city.name} is being razed."
+        }
         id == "stopraze" -> { city.isBeingRazed = false; "🧯 ${city.name} is no longer being razed." }
         id == "clearq" -> {
             val cc = city.cityConstructions
@@ -272,23 +281,13 @@ object Features {
         else -> throw PlayerError("Unknown city action.")
     }
 
+    /** Faith purchases: units and buildings (Cathedral, Pagoda…) whose uniques allow it. Ids "faith:Faith~<queueIndex>~<name>". */
     fun faithBuyChoices(city: City): List<Choice> {
-        if (city.isPuppet || !city.civ.gameInfo.isReligionEnabled()) return emptyList()
-        val cc = city.cityConstructions
-        return (cc.getConstructableUnits() + city.getRuleset().units.values.asSequence().filter { it.canBePurchasedWithStat(city, Stat.Faith) })
-            .distinctBy { it.name }
-            .mapNotNull { u ->
-                if (!u.canBePurchasedWithStat(city, Stat.Faith)) return@mapNotNull null
-                val cost = u.getStatBuyCost(city, Stat.Faith) ?: return@mapNotNull null
-                if (!cc.isConstructionPurchaseAllowed(u, Stat.Faith, cost)) return@mapNotNull null
-                Choice("faith:${u.name}", "Buy ${u.name}", "$cost faith", "🙏")
-            }.take(8).toList()
+        if (!city.civ.gameInfo.isReligionEnabled()) return emptyList()
+        return GameOps.purchaseChoices(city, listOf(Stat.Faith), "faith:")
     }
 
-    fun buyWithFaith(city: City, name: String): String {
-        if (!city.cityConstructions.purchaseConstruction(name, -1, false, Stat.Faith)) throw PlayerError("Couldn't buy $name with faith.")
-        return "🙏 Bought **$name** with faith in ${city.name}."
-    }
+    fun buyWithFaith(city: City, spec: String): String = GameOps.buy(city, spec, Stat.Faith)
 
     fun queueText(city: City): String {
         val q = city.cityConstructions.constructionQueue
