@@ -24,39 +24,70 @@ function Refresh-Path {
     $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
 }
 
-function Get-JavaMajor {
-    if (-not (Has 'java')) { return 0 }
+# Returns @{ Major; Home } for a java.exe, or $null
+function Probe-Java($exe) {
+    if (-not $exe -or -not (Test-Path $exe)) { return $null }
     $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-    $out = (& java -version 2>&1 | Out-String)
+    $out = (& $exe -XshowSettings:properties -version 2>&1 | Out-String)
     $ErrorActionPreference = $old
-    if ($out -match 'version "(\d+)') { return [int]$Matches[1] }
-    return 0
+    if ($out -notmatch 'version "(\d+)') { return $null }
+    $major = [int]$Matches[1]
+    if ($out -notmatch 'java\.home = (.+)') { return $null }
+    return @{ Major = $major; Home = $Matches[1].Trim() }
+}
+
+# Finds a Java 21+. Many PCs also have an old Java (Minecraft, older apps) set as JAVA_HOME or
+# first on PATH, so look everywhere and remember the one that works.
+function Find-Java {
+    $candidates = @()
+    foreach ($jh in @($env:JAVA_HOME, [Environment]::GetEnvironmentVariable('JAVA_HOME', 'Machine'),
+                      [Environment]::GetEnvironmentVariable('JAVA_HOME', 'User'))) {
+        if ($jh) { $candidates += (Join-Path $jh 'bin\java.exe') }
+    }
+    $candidates += @(Get-Command java -All -ErrorAction SilentlyContinue | ForEach-Object { $_.Source })
+    foreach ($dir in @("$env:ProgramFiles\Eclipse Adoptium", "$env:ProgramFiles\Java", "$env:ProgramFiles\Microsoft",
+                       "$env:ProgramFiles\Zulu", "$env:ProgramFiles\Amazon Corretto", "$env:ProgramFiles\BellSoft")) {
+        if (Test-Path $dir) {
+            $candidates += @(Get-ChildItem $dir -Directory | Sort-Object Name -Descending |
+                ForEach-Object { Join-Path $_.FullName 'bin\java.exe' })
+        }
+    }
+    $best = $null
+    foreach ($c in ($candidates | Select-Object -Unique)) {
+        $j = Probe-Java $c
+        if ($j) {
+            if ($j.Major -ge 21) { return $j }
+            if (-not $best -or $j.Major -gt $best.Major) { $best = $j }
+        }
+    }
+    return $best
 }
 
 # --- 1. Java ---------------------------------------------------------------------------------
 Step 'Checking Java'
-$java = Get-JavaMajor
-if ($java -lt 21) {
-    if ($java -gt 0) { Write-Host "Java $java is installed, but CivBot needs Java 21 or newer." -ForegroundColor Yellow }
+$j = Find-Java
+if (-not $j -or $j.Major -lt 21) {
+    if ($j) { Write-Host "Java $($j.Major) is installed, but CivBot needs Java 21 or newer." -ForegroundColor Yellow }
     else { Write-Host 'Java is not installed.' -ForegroundColor Yellow }
     if ($Interactive -and (Has 'winget')) {
         $a = Read-Host 'Install Java 21 now with winget? [Y/n]'
         if ($a -eq '' -or $a -match '^[Yy]') {
             Native { winget install --id EclipseAdoptium.Temurin.21.JDK -e --accept-source-agreements --accept-package-agreements }
             Refresh-Path
-            # The installer sets JAVA_HOME; use it even if PATH hasn't caught up yet
-            $jh = [Environment]::GetEnvironmentVariable('JAVA_HOME', 'Machine')
-            if ($jh -and (Test-Path "$jh\bin\java.exe")) { $env:JAVA_HOME = $jh; $env:Path = "$jh\bin;" + $env:Path }
-            $java = Get-JavaMajor
+            $j = Find-Java
         }
     }
-    if ($java -lt 21) {
+    if (-not $j -or $j.Major -lt 21) {
         Fail ("Install a Java 21 JDK, then run setup.cmd again:`n" +
               "  winget install EclipseAdoptium.Temurin.21.JDK`n" +
-              "  or download the .msi from https://adoptium.net (tick 'Set JAVA_HOME' in the installer)")
+              "  or download the .msi from https://adoptium.net")
     }
 }
-Write-Host "Java $java found."
+# Use this Java for the build, and remember it for run.cmd and the background task
+$env:JAVA_HOME = $j.Home
+$env:Path = (Join-Path $j.Home 'bin') + ';' + $env:Path
+[IO.File]::WriteAllText((Join-Path $Root '.java-home'), $j.Home, $Utf8)
+Write-Host "Java $($j.Major) found: $($j.Home)"
 
 # --- 2. Unciv --------------------------------------------------------------------------------
 Step 'Getting Unciv (the game engine)'

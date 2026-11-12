@@ -16,8 +16,11 @@ function Stop-Bot {
 
 if ($Run) {
     # What the task runs: keep the bot going, restarting it 10 s after a crash.
-    $jh = [Environment]::GetEnvironmentVariable('JAVA_HOME', 'Machine')
-    if (-not $env:JAVA_HOME -and $jh) { $env:JAVA_HOME = $jh }
+    $saved = Join-Path $Root '.java-home'
+    if (Test-Path $saved) {
+        $jh = (Get-Content $saved -Raw).Trim()
+        if (Test-Path (Join-Path $jh 'bin\java.exe')) { $env:JAVA_HOME = $jh }   # the Java 21 setup.cmd found
+    }
     while ($true) {
         $p = Start-Process -FilePath $bin -WorkingDirectory (Join-Path $Root 'unciv\android\assets') -NoNewWindow -Wait -PassThru `
             -RedirectStandardOutput (Join-Path $Root 'civbot.log') -RedirectStandardError (Join-Path $Root 'civbot-error.log')

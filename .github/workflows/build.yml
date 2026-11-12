@@ -94,10 +94,13 @@ jobs:
           cmd /c "scripts\windows\install-service.cmd"
           if ($LASTEXITCODE -ne 0) { exit 1 }
           Get-ScheduledTask -TaskName CivBot | Format-List TaskName, State
-          Start-Sleep -Seconds 20
-          Get-Content civbot.log, civbot-error.log -ErrorAction SilentlyContinue | Select-Object -Last 20
+          # The runner's system-wide JAVA_HOME is an older Java: the task must still use the Java 21 setup found
+          Start-Sleep -Seconds 45
+          $log = (Get-Content civbot.log, civbot-error.log -ErrorAction SilentlyContinue) -join "`n"
+          $log.Split("`n") | Select-Object -Last 20
           cmd /c "scripts\windows\install-service.cmd -Remove"
           if (Get-ScheduledTask -TaskName CivBot -ErrorAction SilentlyContinue) { exit 1 }
+          if ($log -notmatch 'Unciv engine ready') { Write-Host 'The bot did not start in the background task'; exit 1 }
           exit 0
       - name: Upload panel screenshots
         if: always()

@@ -5,8 +5,11 @@ $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $bin = Join-Path $Root 'bot\build\install\civbot\bin\civbot.bat'
 if (-not (Test-Path $bin)) { Write-Host 'Not built yet: run setup.cmd first.' -ForegroundColor Red; exit 1 }
-$jh = [Environment]::GetEnvironmentVariable('JAVA_HOME', 'Machine')
-if (-not $env:JAVA_HOME -and $jh) { $env:JAVA_HOME = $jh }
+$saved = Join-Path $Root '.java-home'
+if (Test-Path $saved) {
+    $jh = (Get-Content $saved -Raw).Trim()
+    if (Test-Path (Join-Path $jh 'bin\java.exe')) { $env:JAVA_HOME = $jh }   # the Java 21 setup.cmd found
+}
 # Unciv loads its rules with relative paths, so run from its assets folder.
 # (The bot finds this folder's .env and data from there, so no path is passed: civbot.bat
 # would split a folder name that contains spaces.)

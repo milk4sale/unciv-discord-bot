@@ -13,3 +13,4 @@ selftest-out/
 *.log
 .env.txt
 unciv-download/
+.java-home
