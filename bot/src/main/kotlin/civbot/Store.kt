@@ -37,6 +37,10 @@ class Settings(
     /** Empty = all victory types */
     var victoryTypes: ArrayList<String> = ArrayList(),
     var worldWrap: Boolean = false,
+    /** Selected mods (ModsPlus) */
+    var mods: ArrayList<String> = ArrayList(),
+    /** Free-form options owned by extensions */
+    var extra: HashMap<String, String> = HashMap(),
 )
 
 enum class Status { LOBBY, RUNNING, ENDED }
@@ -82,6 +86,8 @@ class Store(private val dir: File) {
         setElementType(GameMeta::class.java, "seats", Seat::class.java)
         setElementType(GameMeta::class.java, "events", String::class.java)
         setElementType(Settings::class.java, "victoryTypes", String::class.java)
+        setElementType(Settings::class.java, "mods", String::class.java)
+        setElementType(Settings::class.java, "extra", String::class.java)
     }
 
     init { dir.mkdirs() }

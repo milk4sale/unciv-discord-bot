@@ -64,6 +64,10 @@ object GameOps {
     }
 
     fun startGame(meta: GameMeta): GameInfo {
+        Extensions.all.firstNotNullOfOrNull { it.createGame(meta) }?.let { game ->
+            for (seat in meta.seats) seat.civId = game.civilizations.first { it.playerId == "discord:${seat.userId}" }.civID
+            return game
+        }
         val s = meta.settings
         val setup = GameSetupInfo()
         val ruleset = com.unciv.models.ruleset.RulesetCache[com.unciv.models.metadata.BaseRuleset.Civ_V_GnK.fullName]!!

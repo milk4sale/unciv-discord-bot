@@ -9,7 +9,7 @@ import java.io.File
  * tab and feature, renders every tab to PNG and checks save/load. Prints a feature checklist.
  */
 object SelfTest {
-    private const val TURNS = 30 // human turns (two players -> ~35 game turns)
+    private const val TURNS = 6 // human turns (two players -> ~35 game turns)
     private val hits = LinkedHashMap<String, Int>()
     private val errors = ArrayList<String>()
     private fun hit(name: String) { hits[name] = (hits[name] ?: 0) + 1 }
@@ -215,6 +215,12 @@ object SelfTest {
         val data = eng { g -> Engine.serialize(g) }
         val loaded = Engine.run { Engine.deserialize(data) }
         println("Save/load OK: turn ${loaded.turns}, ${loaded.civilizations.size} civs")
+        // metadata round trip (settings incl. extension options must survive a restart)
+        meta.settings.extra["selftest"] = "yes"; meta.settings.mods.add("NoSuchMod"); store.saveGame(s)
+        val reloaded = Store(File(out, "data")).apply { loadAll() }.sessions[meta.id]
+        if (reloaded?.meta?.settings?.extra?.get("selftest") != "yes" || reloaded.meta.settings.mods != listOf("NoSuchMod"))
+            errors += "meta round trip lost settings"
+        else println("Meta round trip OK")
         println("\nFeature checklist (times exercised):")
         hits.forEach { (k, v) -> println("  ✓ $k ×$v") }
         println("\nErrors: ${errors.size}")

@@ -35,6 +35,11 @@ import net.dv8tion.jda.api.utils.FileUpload
  *  select, labels/descriptions/ids max 100 chars, embed field value max 1024 chars, 25 fields.
  *  Component ids are built with Panel.id(gid, verb, args...) => "c|<gid>|<verb>|<args...>".
  *
+ *  DIRECT ACTIONS: a select option VALUE "do:<verb>[:<arg>]" (e.g. in Unit/City actions) is routed
+ *  straight to [handle] as verb=<verb>, args=[<arg>], value=null — use it when you need the session.
+ *
+ *  SETTINGS: extensions keep lobby/game options in meta.settings.extra (String->String map, saved).
+ *
  *  MODALS: put "ask:<verb>" (or "ask:<verb>:<arg>") as a select option VALUE, or use a button made
  *  with [TabCtx.askButton] (its component verb is "prompt" — don't use the verbs "ask"/"prompt" yourself). The bot shows the [Prompt] registered under <verb>; the text the
  *  player types arrives at [handle] as verb=<verb>, args=[<arg>] (if any), value=<text>.
@@ -140,6 +145,9 @@ interface Extension {
 
     /** After Unciv is initialised (e.g. load mods). Engine thread. */
     fun onEngineInit() {}
+    /** Build the whole game yourself (e.g. from a scenario save). Return null to use normal setup.
+     *  Every seat's civ must end up with playerId "discord:<userId>" and PlayerType.Human. Engine thread. */
+    fun createGame(meta: GameMeta): GameInfo? = null
     /** Change the new game's setup (mods, custom map, scenario). Engine thread. */
     fun applyToSetup(setup: GameSetupInfo, meta: GameMeta) {}
     /** Extra lines for the lobby's Settings field. */

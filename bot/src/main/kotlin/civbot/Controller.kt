@@ -30,7 +30,12 @@ class Controller(val store: Store) {
      * [value] is the picked select value (several values are joined with newlines) or modal text.
      * Returns a [TurnResult] if the turn ended, so the caller can announce it.
      */
-    fun apply(s: Session, seat: Seat, verb: String, args: List<String>, value: String? = null): TurnResult? {
+    fun apply(s: Session, seat: Seat, verbIn: String, argsIn: List<String>, valueIn: String? = null): TurnResult? {
+        // "do:<verb>[:<arg>]" select values call another verb directly (see Ext.kt)
+        val direct = valueIn?.takeIf { it.startsWith("do:") }?.removePrefix("do:")?.split(":", limit = 2)
+        val verb = direct?.get(0) ?: verbIn
+        val args = direct?.drop(1) ?: argsIn
+        val value = if (direct != null) null else valueIn
         val st = state(s.meta.id, seat.userId)
         val game = s.game ?: throw PlayerError("This game hasn't started yet.")
         return Engine.withGame(game) {
