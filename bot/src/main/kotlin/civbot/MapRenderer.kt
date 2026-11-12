@@ -8,6 +8,7 @@ import com.unciv.logic.map.HexMath
 import com.unciv.logic.map.mapunit.MapUnit
 import com.unciv.logic.map.tile.RoadStatus
 import com.unciv.logic.map.tile.Tile
+import com.unciv.logic.map.tile.TileHistory
 import com.unciv.models.tilesets.TileSetConfig
 import java.awt.BasicStroke
 import java.awt.Color
@@ -100,7 +101,13 @@ object MapRenderer {
     private fun hasTile(name: String) = tileImage(name) != null
 
     /** Mirrors Unciv's TileLayerTerrain image selection (combined images, rule variants, fallbacks). */
-    private fun layersFor(tile: Tile, viewer: Civilization?): List<BufferedImage> {
+    /** Owner of [tile] — now, or at [turn] from the tile history (replays). */
+    private fun ownerAt(tile: Tile, turn: Int?): Civilization? =
+        if (turn == null) tile.getOwner() else tile.history.getState(turn).owningCivName?.let { tile.tileMap.gameInfo.getCivilizationOrNull(it) }
+    private fun cityAt(tile: Tile, turn: Int?): Boolean =
+        if (turn == null) tile.isCityCenter() else tile.history.getState(turn).cityCenterType != TileHistory.TileHistoryState.CityCenterType.None
+
+    private fun layersFor(tile: Tile, viewer: Civilization?, turn: Int? = null): List<BufferedImage> {
         val names = ArrayList<String>()
         val terrain = ArrayList<String>().apply {
             add(tile.baseTerrain)
@@ -112,15 +119,15 @@ object MapRenderer {
             val resObj = tile.ruleset.tileResources[res]
             if (viewer == null || (resObj != null && viewer.tech.isRevealed(resObj))) extras += res
         }
-        if (tile.isCityCenter()) {
+        if (cityAt(tile, turn)) {
             // City centre art depends on the owner's era
-            val era = tile.getOwner()?.getEra()?.name
+            val era = ownerAt(tile, turn)?.getEra()?.name
             val cityImg = listOf("City center-$era", "City center").firstOrNull { hasTile(it) }
             names += terrain.filter { hasTile(it) }.ifEmpty { listOf(tile.baseTerrain) }
             if (cityImg != null) names += cityImg
             return names.mapNotNull { tileImage(it) }
         }
-        tile.getShownImprovement(viewer)?.let { extras += it }
+        if (turn == null) tile.getShownImprovement(viewer)?.let { extras += it }
 
         val all = (terrain + extras).joinToString("+")
         val variant = tileSetConfig.ruleVariants[all]
@@ -187,7 +194,7 @@ object MapRenderer {
     }
 
     /** The whole map, small, for the "full map" view and end-of-game overview. */
-    fun renderWhole(tiles: Collection<Tile>, viewer: Civilization?, scale: Int = 1): ByteArray {
+    fun renderWhole(tiles: Collection<Tile>, viewer: Civilization?, scale: Int = 1, replayTurn: Int? = null): ByteArray {
         val r = 16.0 * scale
         val pts = tiles.map { t -> val (wx, wy) = worldOf(t.position.x, t.position.y); Triple(t, wx * r, -wy * r) }
         val minX = pts.minOf { it.second } - r
@@ -196,13 +203,15 @@ object MapRenderer {
         val maxY = pts.maxOf { it.third } + r
         val placed = pts.map { Triple(it.first, it.second - minX, it.third - minY) }
         val positions = placed.associate { it.first to Pair(it.second, it.third) }
-        return draw((maxX - minX).toInt(), (maxY - minY).toInt(), placed, positions, viewer, Overlay(), r, scale, null)
+        return draw((maxX - minX).toInt(), (maxY - minY).toInt(), placed, positions, viewer, Overlay(), r, scale, null, replayTurn)
     }
 
     private fun draw(
         width: Int, height: Int,
         placed: List<Triple<Tile, Double, Double>>, positions: Map<Tile, Pair<Double, Double>>,
         viewer: Civilization?, overlay: Overlay, r: Double, scale: Int, window: MapWindow?,
+        /** Replay: owners and cities as of this turn (tile history), no units/roads/improvements/fog */
+        turn: Int? = null,
     ): ByteArray {
         val img = BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB)
         val g = img.createGraphics()
@@ -212,7 +221,7 @@ object MapRenderer {
         g.fillRect(0, 0, width, height)
 
         fun explored(t: Tile) = viewer == null || t.isExplored(viewer)
-        fun visible(t: Tile) = viewer == null || t.isVisible(viewer)
+        fun visible(t: Tile) = if (turn != null) explored(t) else viewer == null || t.isVisible(viewer)
 
         // Draw top-to-bottom so lower tiles' tall art overlaps the ones behind them
         val ordered = placed.sortedBy { it.third }
@@ -223,7 +232,7 @@ object MapRenderer {
                 g.fill(hexPath(cx, cy, r * 0.97))
                 continue
             }
-            for (layer in layersFor(tile, viewer)) {
+            for (layer in layersFor(tile, viewer, turn)) {
                 val w = (2 * r).toInt()
                 val h = (layer.height * (2 * r / layer.width)).toInt()
                 g.drawImage(layer, (cx - r).toInt(), (cy + hexH - h).toInt(), w, h, null)
@@ -250,7 +259,7 @@ object MapRenderer {
                 g.color = color
                 g.drawLine((mx - ux).toInt(), (my - uy).toInt(), (mx + ux).toInt(), (my + uy).toInt())
             }
-            if (tile.roadStatus != RoadStatus.None || tile.isCityCenter()) {
+            if (turn == null && (tile.roadStatus != RoadStatus.None || tile.isCityCenter())) {
                 g.color = if (tile.roadStatus == RoadStatus.Railroad) Color(70, 70, 70) else Color(150, 110, 60)
                 for (n in tile.neighbors) {
                     if (n.roadStatus == RoadStatus.None && !n.isCityCenter()) continue
@@ -264,14 +273,15 @@ object MapRenderer {
             if (tile.hasBottomRiver) edge(6, river, 0.0)
             if (tile.hasBottomLeftRiver) edge(8, river, 0.0)
             if (tile.hasBottomRightRiver) edge(4, river, 0.0)
-            val owner = tile.getOwner()
+            val owner = ownerAt(tile, turn)
             if (owner != null) {
                 val col = awt(owner.nation.getOuterColor())
+                if (turn != null) { g.color = awt(owner.nation.getOuterColor(), 80); g.fill(hexPath(cx, cy, r)) }
                 g.stroke = BasicStroke((1.5 * scale).toFloat(), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
                 for (clock in intArrayOf(12, 2, 4, 6, 8, 10)) {
                     val d = HexMath.getClockPositionToHexcoord(clock)
                     val n = tile.tileMap.getIfTileExistsOrNull(tile.position.x + d.x, tile.position.y + d.y)
-                    if (n?.getOwner() == owner) continue
+                    if (n != null && ownerAt(n, turn) == owner) continue
                     edge(clock, col, 0.12)
                 }
             }
@@ -306,7 +316,7 @@ object MapRenderer {
 
         // Units
         for ((tile, cx, cy) in ordered) {
-            if (!visible(tile)) continue
+            if (!visible(tile) || turn != null) continue
             val units = listOfNotNull(tile.militaryUnit, tile.civilianUnit, tile.airUnits.firstOrNull())
             if (units.isEmpty()) continue
             val offsets = if (units.size == 1) listOf(0.0) else listOf(-0.38, 0.38, 0.0)
@@ -315,7 +325,8 @@ object MapRenderer {
 
         // City banners
         for ((tile, cx, cy) in ordered) {
-            if (!tile.isCityCenter() || !explored(tile)) continue
+            if (!cityAt(tile, turn) || !explored(tile)) continue
+            if (turn != null) { replayBanner(g, tile, turn, cx, cy - hexH * 0.95, scale); continue }
             val city = tile.getCity() ?: continue
             val civ = city.civ
             val label = "${city.population.population} ${city.name}${if (city.isCapital()) " ★" else ""}"
@@ -350,6 +361,22 @@ object MapRenderer {
         }
         g.dispose()
         return ByteArrayOutputStream().also { ImageIO.write(img, "png", it) }.toByteArray()
+    }
+
+    /** City banner in a replay: name (if the city still exists) + capital star from the tile history. */
+    private fun replayBanner(g: Graphics2D, tile: Tile, turn: Int, cx: Double, top: Double, scale: Int) {
+        val civ = ownerAt(tile, turn) ?: return
+        val capital = tile.history.getState(turn).cityCenterType == TileHistory.TileHistoryState.CityCenterType.Capital
+        val label = (tile.getCity()?.takeIf { it.getCenterTile() == tile }?.name ?: "city") + if (capital) " ★" else ""
+        g.font = Font(Font.SANS_SERIF, Font.BOLD, 5 * scale + 3)
+        val fm = g.fontMetrics
+        val w = fm.stringWidth(label) + 4 * scale
+        val h = fm.height
+        val bx = (cx - w / 2).toInt(); val by = (top - h).toInt().coerceAtLeast(0)
+        g.color = awt(civ.nation.getOuterColor(), 230)
+        g.fillRoundRect(bx, by, w, h, h / 2, h / 2)
+        g.color = awt(civ.nation.getInnerColor())
+        g.drawString(label, bx + 2 * scale, by + fm.ascent)
     }
 
     private fun drawUnit(g: Graphics2D, unit: MapUnit, cx: Double, cy: Double, r: Double, scale: Int, selected: Boolean) {

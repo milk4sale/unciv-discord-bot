@@ -343,7 +343,7 @@ object Panel {
                 st.otherCivId = other?.civID
                 val lines = others.take(15).joinToString("\n") { o ->
                     val who = meta.seatOfCiv(o.civID)?.let { " (<@${it.userId}>)" } ?: " (AI)"
-                    "**${o.civName}**$who — ${GameOps.relationText(civ, o)} · ${o.calculateTotalScore().toInt()} pts"
+                    "**${o.civName}**$who — ${GameOps.relationText(civ, o)}${InfoPlus.scoreSuffix(civ, o)}"
                 }
                 eb.addField("Known civilizations", lines.ifEmpty { "You haven't met anyone yet. Explore!" }, false)
                 if (other != null && (st.give.isNotEmpty() || st.ask.isNotEmpty()))
@@ -372,7 +372,7 @@ object Panel {
                 else {
                     eb.addField("🏰 ${cs.civName}", Features.cityStateInfo(civ, cs).take(1024), false)
                     val others = css.filter { it != cs }.take(12).joinToString("\n") { o ->
-                        "${o.civName} — ${o.getDiplomacyManager(civ)?.getInfluence()?.toInt() ?: 0} influence" + (o.allyCiv?.let { " · ally: ${it.civName}" } ?: "")
+                        "${o.civName} — ${o.getDiplomacyManager(civ)?.getInfluence()?.toInt() ?: 0} influence" + (o.allyCiv?.let { " · ally: ${InfoStats.civName(civ, it)}" } ?: "")
                     }
                     if (others.isNotEmpty()) eb.addField("Others", others, false)
                 }
