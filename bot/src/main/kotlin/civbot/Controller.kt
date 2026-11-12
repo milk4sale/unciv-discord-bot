@@ -156,7 +156,10 @@ class Controller(val store: Store) {
                 }
                 "peace" -> {
                     requireTurn(); val o = other(args.firstOrNull() == "cs")
-                    if (o.playerType == PlayerType.Human) {
+                    DiplomacyPlus.peaceBlocker(civ, o)?.let { throw PlayerError(it) } // 10-turn lock after a declaration, city-state's ally
+                    if (o.isCityState) {
+                        val msg = DiplomacyPlus.cityStatePeace(civ, o); st.flash += msg; s.meta.addEvent(msg)
+                    } else if (o.playerType == PlayerType.Human) {
                         propose(Proposal(s.meta.id, "peace", civ.civID, o.civID))
                         st.flash += "🕊️ Peace proposal sent to ${o.civName}."
                     } else {
@@ -337,7 +340,7 @@ class Controller(val store: Store) {
             else -> "❌ ${b.civName} rejected the deal from ${a.civName}."
         }
         val msg = when (p.kind) {
-            "peace" -> GameOps.makePeace(a, b)
+            "peace" -> DiplomacyPlus.peaceBlocker(a, b)?.let { "❌ $it" } ?: GameOps.makePeace(a, b)
             "friend" -> if (Features.friendshipAvailable(a, b)) Features.signFriendship(a, b) else "Friendship isn't possible any more."
             else -> {
                 val tl = Features.buildTrade(a, b, p.give, p.ask)

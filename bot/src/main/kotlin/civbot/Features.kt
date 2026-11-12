@@ -69,6 +69,7 @@ object Features {
     private fun offerChoices(game: com.unciv.logic.GameInfo, offers: List<TradeOffer>, side: String): List<Choice> {
         val out = ArrayList<Choice>()
         for (o in offers) {
+            if (!o.isTradable()) continue // e.g. no gold, negative gold per turn, peace proposals not allowed yet
             when (o.type) {
                 TradeOfferType.City -> {
                     val city = game.getCities().firstOrNull { it.id == o.name } ?: continue
@@ -78,12 +79,24 @@ object Features {
                     val target = game.civilizations.firstOrNull { it.civID == o.name } ?: continue
                     out += Choice("$side${encode(o, o.amount)}", "Declare war on ${target.civName}", "joins the war", "⚔️")
                 }
-                TradeOfferType.Gold -> listOf(50, 100, 250, 500).filter { it < o.amount }.plus(o.amount).distinct().forEach {
-                    out += Choice("$side${encode(o, it)}", "$it gold", "one-off payment", "💰")
+                TradeOfferType.Gold -> {
+                    listOf(50, 100, 250, 500).filter { it < o.amount }.plus(o.amount).distinct().forEach {
+                        out += Choice("$side${encode(o, it)}", "$it gold", "one-off payment", "💰")
+                    }
+                    out += DiplomacyPlus.customAmountChoice(side, o)
                 }
-                TradeOfferType.Gold_Per_Turn -> listOf(2, 5, 10).filter { it < o.amount }.plus(o.amount).distinct().forEach {
-                    out += Choice("$side${encode(o, it)}", "$it gold per turn", "for ${o.duration} turns", "💰")
+                TradeOfferType.Gold_Per_Turn -> {
+                    listOf(2, 5, 10).filter { it < o.amount }.plus(o.amount).distinct().forEach {
+                        out += Choice("$side${encode(o, it)}", "$it gold per turn", "for ${o.duration} turns", "💰")
+                    }
+                    out += DiplomacyPlus.customAmountChoice(side, o)
                 }
+                TradeOfferType.Introduction, TradeOfferType.PeaceProposal -> {
+                    val third = game.civilizations.firstOrNull { it.civID == o.name } ?: continue
+                    out += if (o.type == TradeOfferType.Introduction) Choice("$side${encode(o, o.amount)}", "Introduction to ${third.civName}", "they meet each other", "👋")
+                    else Choice("$side${encode(o, o.amount)}", "Make peace with ${third.civName}", "ends that war", "🕊️")
+                }
+                TradeOfferType.Luxury_Resource -> out += Choice("$side${encode(o, 1)}", "${o.name} ×1", "luxury resource (you have ${o.amount})", "💎")
                 TradeOfferType.Strategic_Resource, TradeOfferType.Stockpiled_Resource -> listOf(1, o.amount).distinct().forEach {
                     out += Choice("$side${encode(o, it)}", "${o.name} ×$it", "strategic resource", "⛏️")
                 }
@@ -94,14 +107,15 @@ object Features {
                     })
             }
         }
-        return out.take(25)
+        return out
     }
 
     /** (what we can give, what we can ask for) */
     fun tradeChoices(civ: Civilization, other: Civilization): Pair<List<Choice>, List<Choice>> {
         if (civ.getDiplomacyManager(other) == null || other.isCityState) return emptyList<Choice>() to emptyList()
         val tl = TradeLogic(civ, other)
-        return offerChoices(civ.gameInfo, tl.ourAvailableOffers.toList(), "g") to offerChoices(civ.gameInfo, tl.theirAvailableOffers.toList(), "a")
+        val ok = { o: TradeOffer -> DiplomacyPlus.offerAllowed(civ, other, o) }
+        return offerChoices(civ.gameInfo, tl.ourAvailableOffers.filter(ok), "g") to offerChoices(civ.gameInfo, tl.theirAvailableOffers.filter(ok), "a")
     }
 
     fun buildTrade(civ: Civilization, other: Civilization, give: List<String>, ask: List<String>): TradeLogic {
@@ -118,6 +132,7 @@ object Features {
         }
         add(give, tl.ourAvailableOffers.toList(), tl.currentTrade.ourOffers)
         add(ask, tl.theirAvailableOffers.toList(), tl.currentTrade.theirOffers)
+        DiplomacyPlus.completeTreaties(tl) // treaties go on both sides + research-agreement gold top-up (like Unciv)
         return tl
     }
 
@@ -126,9 +141,12 @@ object Features {
             when (o.type) {
                 TradeOfferType.Gold -> "${o.amount} gold"
                 TradeOfferType.Gold_Per_Turn -> "${o.amount} gold/turn"
-                TradeOfferType.Strategic_Resource, TradeOfferType.Stockpiled_Resource -> "${o.name} ×${o.amount}"
+                TradeOfferType.Strategic_Resource, TradeOfferType.Stockpiled_Resource, TradeOfferType.Luxury_Resource -> "${o.name} ×${o.amount}"
                 TradeOfferType.City -> "city of " + (tl.ourCivilization.gameInfo.getCities().firstOrNull { it.id == o.name }?.name ?: "?")
                 TradeOfferType.WarDeclaration -> "war on " + (tl.ourCivilization.gameInfo.civilizations.firstOrNull { it.civID == o.name }?.civName ?: "?")
+                TradeOfferType.Introduction -> "introduction to " + (tl.ourCivilization.gameInfo.civilizations.firstOrNull { it.civID == o.name }?.civName ?: "?")
+                TradeOfferType.PeaceProposal -> "peace with " + (tl.ourCivilization.gameInfo.civilizations.firstOrNull { it.civID == o.name }?.civName ?: "?")
+                TradeOfferType.Treaty -> GameOps.clean(o.name) + (if (o.duration > 0) " (${o.duration} turns)" else "")
                 else -> GameOps.clean(o.name)
             }
         }.ifEmpty { "nothing" }
@@ -167,6 +185,7 @@ object Features {
     fun canDenounce(civ: Civilization, other: Civilization): Boolean {
         val dm = civ.getDiplomacyManager(other) ?: return false
         return !other.isCityState && !civ.isAtWarWith(other) && !dm.hasFlag(DiplomacyFlags.Denunciation)
+            && !dm.hasFlag(DiplomacyFlags.DeclarationOfFriendship) // Unciv hides Denounce while you're friends
     }
 
     fun denounce(civ: Civilization, other: Civilization): String {
@@ -185,12 +204,10 @@ object Features {
         val lines = ArrayList<String>()
         lines += "${cs.cityStateType.name} city-state · ${cs.cities.size} city"
         if (dm != null) lines += "Influence: **${dm.getInfluence().toInt()}** · ${dm.relationshipLevel()}" + (if (civ.isAtWarWith(cs)) " · ⚔️ at war" else "")
-        lines += "Ally: ${cs.allyCiv?.let { InfoStats.civName(civ, it) } ?: "none"}"
+        lines += DiplomacyPlus.allyLine(civ, cs)
         val protectors = f.getProtectorCivs()
         if (protectors.isNotEmpty()) lines += "Protected by: ${protectors.joinToString { InfoStats.civName(civ, it) }}"
-        val quests = cs.questManager.getAssignedQuestsFor(civ.civID).toList()
-        if (quests.isNotEmpty()) lines += "Quests for you:\n" + quests.joinToString("\n") { "• " + GameOps.clean(it.getDescription()) }
-        return lines.joinToString("\n")
+        return lines.joinToString("\n") // quests, bonuses and tribute: DiplomacyPlus.cityStateFields
     }
 
     fun cityStateChoices(civ: Civilization, cs: Civilization): List<Choice> {
@@ -201,9 +218,9 @@ object Features {
             out += Choice("gift:$g", "Gift $g gold", "+${f.influenceGainedByGift(civ, g)} influence", "🎁")
         if (f.otherCivCanPledgeProtection(civ)) out += Choice("pledge", "Pledge to protect", "Others lose influence if they attack it", "🛡️")
         if (f.otherCivCanWithdrawProtection(civ)) out += Choice("revoke", "Withdraw protection", "", "🚫")
-        if (f.getTributeWillingness(civ) > 0) out += Choice("tribgold", "Demand ${f.goldGainedByTribute()} gold tribute", "Costs influence", "💰")
-        if (f.getTributeWillingness(civ, demandingWorker = true) > 0) out += Choice("tribworker", "Demand a worker as tribute", "Costs influence", "🔨")
-        return out
+        if (f.getTributeWillingness(civ) >= 0) out += Choice("tribgold", "Demand ${f.goldGainedByTribute()} gold tribute", "-15 influence", "💰")
+        if (f.getTributeWillingness(civ, demandingWorker = true) >= 0) out += Choice("tribworker", "Demand a worker as tribute", "-50 influence", "🔨")
+        return out + DiplomacyPlus.cityStateGiftChoices(civ, cs)
     }
 
     fun doCityState(civ: Civilization, cs: Civilization, id: String): String {
