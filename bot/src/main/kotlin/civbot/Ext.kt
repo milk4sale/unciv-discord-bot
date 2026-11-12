@@ -171,6 +171,10 @@ object Extensions {
 
     fun tab(id: String): Pair<Extension, ExtTab>? =
         all.asSequence().flatMap { e -> e.tabs.asSequence().map { e to it } }.firstOrNull { it.second.id == id }
-    fun prompt(verb: String): Prompt? = all.firstNotNullOfOrNull { it.prompts[verb] }
+    /** Popups used by core features */
+    private val corePrompts = mapOf(
+        "roadto" to Prompt("Connect road to…", "Tile code or city name", "e.g. D5 or a city you've seen"),
+    )
+    fun prompt(verb: String): Prompt? = corePrompts[verb] ?: all.firstNotNullOfOrNull { it.prompts[verb] }
     fun advisorSkips(civ: Civilization): Set<String> = all.flatMap { runCatching { it.advisorSkips(civ) }.getOrDefault(emptySet()) }.toSet()
 }

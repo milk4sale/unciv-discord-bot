@@ -23,7 +23,7 @@ Discord, with nothing to install as a player.
 
 | Panel tab | Features |
 |---|---|
-| ⚔️ **Units** | move with arrow buttons or 🎯 *Go to* a tile code / city; found cities; build roads, farms, mines… and queue the next improvement; fortify, sleep, explore, automate; attack; promotions and upgrades; escort pairs; pillage; paradrop; gift units to city-states; rename; Great Person abilities; missionaries and prophets; **↩️ undo** |
+| ⚔️ **Units** | move with arrow buttons or 🎯 *Go to* a tile code / city; found cities; build roads, farms, mines… and queue the next improvement; 🛣️ connect a road to any tile or city; fortify, sleep (also until healed), explore, automate; attack; promotions and upgrades; escort pairs; pillage; paradrop; gift units to city-states; rename; Great Person abilities; missionaries and prophets; **↩️ undo** |
 | 🏙️ **Cities** | production with an optional 📋 queue; buy with gold or faith; city bombard; citizen focus; buy tiles; sell buildings; rename; annex puppets; raze / stop razing; **↩️ undo** |
 | 👥 **Citizens** | choose exactly which tiles each city works, lock tiles, assign specialists, avoid growth |
 | 🎖️ **Military** | army overview, wars and enemies in range, ☢️ nukes with a blast preview and a confirm step, ✈️ air sweeps, air strikes, rebasing to cities or carriers |

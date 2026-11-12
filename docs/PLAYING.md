@@ -66,6 +66,13 @@ The panel has:
 Each click updates the same panel in place. If you leave it for a long time and a click stops
 working, just open it again.
 
+## Long lists
+
+Discord dropdowns hold 25 entries. Longer lists, such as a big army, a late-game city's build
+options or a long trade list, are split into pages. Pick **▶ More…** at the bottom of the dropdown
+for the next page, or **◀ Previous page** at the top to go back. In the multi-pick trade lists,
+what you picked on other pages is kept, and the dropdown tells you how many.
+
 ## Reading the map
 
 - Every tile has a **code** like `D5`: a column letter and a row number, like a chess board.
@@ -102,8 +109,11 @@ Switch tabs with the **dropdown at the top** of the panel.
   - **Great People:** hurry research or production, conduct a trade mission, create great improvements
   - **Religious units:** found or enhance a religion, spread religion, remove heresy
   - **Escort with …** pairs a civilian with a military unit on the same tile, so they move together
-  - **Fortify**, **Sleep**, **Explore** (automatic scouting), **Automate** (the AI runs the unit),
-    **Wake up** (cancels standing orders), **Skip this turn**, **Disband**
+  - **Fortify**, **Sleep**, **Fortify / Sleep until healed** (wakes up at full health), **Explore**
+    (automatic scouting), **Automate** (the AI runs the unit), **Wake up** (cancels standing
+    orders), **Skip this turn**, **Disband**
+  - **🛣️ Connect road to…** (workers): type a tile code or a city name and the worker builds a road
+    all the way there over the next turns
   - **Queue next: …** / **Remove Forest, then build Farm**: workers can line up a second improvement
   - **Gift to city-state** (in a city-state's land), **✏️ Rename unit**
   - **☢️ Nuke a tile…**, **✈️ Air sweep…**, **🎯 Attack target…**, **🛬 Rebase to …** for nukes and aircraft

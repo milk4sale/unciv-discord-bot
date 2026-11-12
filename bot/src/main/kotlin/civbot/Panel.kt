@@ -33,6 +33,10 @@ class PanelState {
     var tab = Tab.UNITS.name
     /** Scratch state for extensions (see ActionCtx.ext) */
     val ext = HashMap<String, Any>()
+    /** Dropdown paging: select key ("verb|args") -> page the player navigated to */
+    val pages = HashMap<String, Int>()
+    /** Option ids shown in each dropdown at the last render (multi-selects keep picks from other pages) */
+    val visible = HashMap<String, List<String>>()
     var unitId: Int? = null
     var cityId: String? = null
     var otherCivId: String? = null
@@ -71,19 +75,52 @@ object Panel {
             o
         }
 
+    /** Panel state of the render in progress (renders run one at a time on the engine thread). */
+    private var renderState: PanelState? = null
+    private const val PAGE = 23
+
+    /** Key that identifies a dropdown across renders: the "verb|args" part of its component id. */
+    fun pageKey(customId: String) = customId.split("|").drop(2).joinToString("|")
+
+    /**
+     * Discord dropdowns hold 25 options. Longer lists are split into pages of [PAGE] with
+     * "◀ Previous page" / "▶ More…" entries inside the dropdown (values "pg:<key>:<page>").
+     */
+    private fun paged(customId: String, placeholder: String, choices: List<Choice>, selected: Collection<String>): Pair<List<Choice>, String> {
+        val key = pageKey(customId)
+        val st = renderState
+        if (choices.size <= 25) {
+            st?.visible?.put(key, choices.map { it.id })
+            return choices to placeholder
+        }
+        val pages = (choices.size + PAGE - 1) / PAGE
+        val selectedPage = choices.indexOfFirst { it.id in selected }.takeIf { it >= 0 }?.div(PAGE)
+        val page = (st?.pages?.get(key) ?: selectedPage ?: 0).coerceIn(0, pages - 1)
+        val slice = choices.subList(page * PAGE, minOf(choices.size, (page + 1) * PAGE))
+        st?.visible?.put(key, slice.map { it.id })
+        val out = ArrayList<Choice>()
+        if (page > 0) out += Choice("pg:$key:${page - 1}", "◀ Previous page", "page $page of $pages", "◀️")
+        out += slice
+        if (page < pages - 1) out += Choice("pg:$key:${page + 1}", "▶ More… (page ${page + 2} of $pages)", "${choices.size} options in total", "▶️")
+        return out to "$placeholder (${page + 1}/$pages)"
+    }
+
     private fun select(customId: String, placeholder: String, choices: List<Choice>, selected: String? = null, enabled: Boolean = true): StringSelectMenu {
         if (choices.isEmpty())
             return StringSelectMenu.create(customId).setPlaceholder(placeholder.take(150)).addOption("—", "none").setDisabled(true).build()
-        return StringSelectMenu.create(customId).setPlaceholder(placeholder.take(150))
-            .addOptions(options(choices, listOfNotNull(selected))).setDisabled(!enabled).build()
+        val (shown, ph) = paged(customId, placeholder, choices, listOfNotNull(selected))
+        return StringSelectMenu.create(customId).setPlaceholder(ph.take(150))
+            .addOptions(options(shown, listOfNotNull(selected))).setDisabled(!enabled).build()
     }
 
     private fun multiSelect(customId: String, placeholder: String, choices: List<Choice>, selected: List<String>, enabled: Boolean): StringSelectMenu {
         if (choices.isEmpty())
             return StringSelectMenu.create(customId).setPlaceholder(placeholder.take(150)).addOption("—", "none").setDisabled(true).build()
-        val opts = options(choices, selected)
-        return StringSelectMenu.create(customId).setPlaceholder(placeholder.take(150)).addOptions(opts)
-            .setRequiredRange(0, opts.size).setDisabled(!enabled).build()
+        val (shown, ph) = paged(customId, placeholder, choices, selected)
+        val picked = selected.count { s -> choices.any { it.id == s } && shown.none { it.id == s } }
+        val opts = options(shown, selected)
+        return StringSelectMenu.create(customId).setPlaceholder((if (picked > 0) "$ph · $picked picked on other pages" else ph).take(150))
+            .addOptions(opts).setRequiredRange(0, opts.size).setDisabled(!enabled).build()
     }
 
     private fun btn(gid: String, verb: String, label: String, emoji: String, style: Int = 2, enabled: Boolean = true, vararg args: String): Button {
@@ -106,6 +143,7 @@ object Panel {
     }
 
     fun render(session: Session, seat: Seat, st: PanelState): Rendered {
+        renderState = st
         val game = session.game!!
         val meta = session.meta
         val civ = GameOps.civOf(game, seat)

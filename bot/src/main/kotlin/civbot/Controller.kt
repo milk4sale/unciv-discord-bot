@@ -31,6 +31,17 @@ class Controller(val store: Store) {
      * Returns a [TurnResult] if the turn ended, so the caller can announce it.
      */
     fun apply(s: Session, seat: Seat, verbIn: String, argsIn: List<String>, valueIn: String? = null): TurnResult? {
+        // Dropdown paging: "pg:<key>:<page>" just flips the page (multi-select picks are merged below)
+        val nav = valueIn?.split("\n")?.firstOrNull { it.startsWith("pg:") }
+        if (nav != null) {
+            val st = state(s.meta.id, seat.userId)
+            val rest = nav.removePrefix("pg:")
+            st.pages[rest.substringBeforeLast(":")] = rest.substringAfterLast(":").toIntOrNull() ?: 0
+            val picks = valueIn.split("\n").filter { it.isNotBlank() && !it.startsWith("pg:") }
+            if (verbIn == "give") st.give = mergePicks(st.give, picks, st.visible[verbIn])
+            if (verbIn == "ask") st.ask = mergePicks(st.ask, picks, st.visible[verbIn])
+            return null
+        }
         // "do:<verb>[:<arg>]" select values call another verb directly (see Ext.kt)
         val direct = valueIn?.takeIf { it.startsWith("do:") }?.removePrefix("do:")?.split(":", limit = 2)
         val verb = direct?.get(0) ?: verbIn
@@ -62,6 +73,11 @@ class Controller(val store: Store) {
                     ?: st.unitId.also { st.flash += "✅ All units have orders." }
                 "uact" -> { requireTurn(); val u = unit(); st.flash += GameOps.doUnitChoice(u, value!!); changed = true; afterUnitAction(civ, st, u) }
                 "step" -> { requireTurn(); val u = unit(); st.flash += GameOps.stepUnit(u, args[0].toInt()); changed = true; afterUnitAction(civ, st, u) }
+                "roadto" -> {
+                    requireTurn(); val u = unit()
+                    val target = resolveTile(game, civ, st, value!!.trim(), u.getTile().position)
+                    st.flash += GameOps.connectRoad(u, target); changed = true; afterUnitAction(civ, st, u)
+                }
                 "goto" -> {
                     requireTurn(); val u = unit()
                     val target = resolveTile(game, civ, st, value!!.trim(), u.getTile().position)
@@ -118,8 +134,8 @@ class Controller(val store: Store) {
                 "gp" -> { requireTurn(); st.flash += Features.chooseGreatPerson(civ, value!!.removePrefix("gp:")); changed = true }
                 // ---- diplomacy
                 "selciv" -> { st.otherCivId = value?.removePrefix("civ:"); st.give = emptyList(); st.ask = emptyList() }
-                "give" -> st.give = values()
-                "ask" -> st.ask = values()
+                "give" -> st.give = mergePicks(st.give, values(), st.visible["give"])
+                "ask" -> st.ask = mergePicks(st.ask, values(), st.visible["ask"])
                 "trade" -> {
                     requireTurn(); val o = other()
                     val tl = Features.buildTrade(civ, o, st.give, st.ask)
@@ -229,6 +245,10 @@ class Controller(val store: Store) {
         } ?: game.getCities().firstOrNull { it.name.equals(input, true) && it.getCenterTile().isExplored(civ) }?.getCenterTile()
         ?: throw PlayerError("Couldn't find tile **$input**. Use a code from the map, like D5, or a city name you've seen.")
     }
+
+    /** Multi-select over pages: keep picks from pages not shown, replace those on the shown page. */
+    private fun mergePicks(old: List<String>, now: List<String>, shown: List<String>?): List<String> =
+        (old.filter { shown == null || it !in shown } + now).distinct()
 
     /** Ends whoever's turn it is (used for AFK auto-skip and when a player is removed). */
     fun forceEndTurn(s: Session): TurnResult = Engine.withGame(s.game!!) { endTurn(s) }

@@ -187,6 +187,68 @@ object SelfTest {
             act(alice, "denounce", feature = "denounce")
             st.flash.forEach { println("  > $it") }; st.flash.clear()
 
+            // ---- Paging: long dropdowns must page instead of cutting options off
+            run {
+                val pst = ctl.state(meta.id, alice.userId)
+                fun check(ok: Boolean, what: String) { if (ok) hit(what) else errors += "paging: $what failed" }
+                // until healed
+                val hurt = eng { g -> val a = GameOps.civOf(g, alice)
+                    val u = a.units.addUnit("Spearman", a.cities.first())!!
+                    // put it on free land in our territory (embarked units can't heal)
+                    a.cities.first().getTiles().firstOrNull { it.isLand && !it.isImpassible() && it.militaryUnit == null }?.let { t -> u.removeFromTile(); u.putInTile(t) }
+                    u.health = 40; u.currentMovement = u.getMaxMovement().toFloat(); u }
+                act(alice, "tab", value = "UNITS"); act(alice, "selunit", value = "u:${hurt.id}")
+                val healChoice = eng { GameOps.unitChoices(hurt) }.firstOrNull { it.id == "fortifyheal" || it.id == "sleepheal" }
+                if (healChoice != null) act(alice, "uact", value = healChoice.id, feature = "fortify/sleep until healed")
+                else errors += "until healed: no option for a wounded unit " + eng { _ ->
+                    "hp=${hurt.health} moves=${hurt.currentMovement} heal=${hurt.canHealInCurrentTile()} canFortify=${hurt.canFortify()} " +
+                    "fortified=${hurt.isFortified()} action=${hurt.action} tile=${hurt.getTile().baseTerrain}/${hurt.getTile().isLand} " +
+                    "alive=${hurt.civ.units.getCivUnits().contains(hurt)} choices=${GameOps.unitChoices(hurt).map { it.id }}" }
+                // a big army: >25 units in the unit picker
+                val army = eng { g -> val a = GameOps.civOf(g, alice); val c = a.cities.first(); (1..40).mapNotNull { a.units.addUnit("Warrior", c) } }
+                act(alice, "tab", value = "UNITS"); render(alice)
+                val unitCount = eng { g -> GameOps.civOf(g, alice).units.getCivUnitsSize() }
+                check(unitCount > 25 && (pst.visible["selunit"]?.size ?: 99) in 1..23, "unit picker pages ($unitCount units)")
+                act(alice, "selunit", value = "pg:selunit:1"); render(alice)
+                val page2 = pst.visible["selunit"].orEmpty()
+                check(page2.isNotEmpty() && pst.pages["selunit"] == 1, "unit picker next page")
+                val farUnit = page2.last().removePrefix("u:").toInt()
+                act(alice, "selunit", value = "u:$farUnit"); render(alice, "paging-units")
+                check(pst.unitId == farUnit, "select a unit from page 2")
+                // a late-game city: >25 things to build
+                eng { g -> val a = GameOps.civOf(g, alice)
+                    for (t in g.ruleset.technologies.values.filter { it.era() in listOf("Ancient era", "Classical era", "Medieval era", "Renaissance era") }) a.tech.addTechnology(t.name, false) }
+                val city = eng { g -> GameOps.civOf(g, alice).cities.first() }
+                pst.cityId = city.id
+                val prodCount = eng { GameOps.productionChoices(city).size }
+                act(alice, "tab", value = "CITIES"); render(alice)
+                check(prodCount > 25 && pst.visible["prod"]?.size == 23, "production list pages ($prodCount options)")
+                act(alice, "prod", value = "pg:prod:1"); render(alice)
+                val p2 = pst.visible["prod"].orEmpty().firstOrNull()
+                if (p2 != null) act(alice, "prod", value = p2, feature = "build something from production page 2")
+                // multi-select picks survive page flips (trade lists)
+                pst.visible["give"] = listOf("gA", "gB"); pst.give = listOf("gX", "gA")
+                act(alice, "give", value = "gB")
+                check(pst.give.toSet() == setOf("gX", "gB"), "trade picks kept across pages")
+                pst.give = emptyList(); pst.visible.remove("give")
+                // connect road (worker + The Wheel)
+                val worker = eng { g -> val a = GameOps.civOf(g, alice); a.tech.addTechnology("The Wheel", false); a.units.addUnit("Worker", a.cities.first())!! }
+                act(alice, "selunit", value = "u:${worker.id}"); render(alice)
+                check(eng { GameOps.unitChoices(worker) }.any { it.id == "ask:roadto" }, "connect road offered")
+                val dest = eng { g ->
+                    val w = pst.window!!
+                    worker.getTile().getTilesAtDistance(3).firstOrNull { it.isLand && !it.isImpassible() && it.isExplored(worker.civ) && w.code(it.position.x, it.position.y) != null }
+                        ?.let { w.code(it.position.x, it.position.y) }
+                }
+                if (dest != null) {
+                    act(alice, "roadto", value = dest, feature = "connect road to a tile")
+                    check(eng { worker.isAutomatingRoadConnection() || worker.getTile().roadStatus != com.unciv.logic.map.tile.RoadStatus.None }, "worker is building the road")
+                }
+                // clean up so later tests see a normal-sized army
+                eng { _ -> army.forEach { u -> if (u.civ.units.getCivUnits().contains(u)) u.destroy() } }
+                pst.pages.clear(); pst.flash.clear()
+            }
+
             // ---- Extension self-tests (each feature file tests itself)
             val tctx = SelfTestCtx(s, ctl, alice, bob,
                 act = { seat, verb, args, value, feature ->

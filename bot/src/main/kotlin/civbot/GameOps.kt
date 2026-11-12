@@ -136,6 +136,7 @@ object GameOps {
     }
 
     fun unitStatus(u: MapUnit): String = when {
+        u.isAutomatingRoadConnection() -> "building a road"
         u.isAutomated() -> "automated"
         u.isExploring() -> "exploring"
         u.isMoving() -> "moving"
@@ -214,6 +215,19 @@ object GameOps {
         }
         if (u.isExploring() || u.isMoving()) u.action = null
         return "${u.label()} moved."
+    }
+
+    /** Unciv's "Connect road": the worker builds a road to [target] automatically over the next turns. */
+    fun connectRoad(u: MapUnit, target: Tile): String {
+        if (target == u.getTile()) throw PlayerError("Pick a different tile than the one the worker is on.")
+        if (!target.isExplored(u.civ)) throw PlayerError("You haven't explored that tile yet.")
+        if (target.isWater) throw PlayerError("Roads can't go on water.")
+        if (u.movement.getRoadPath(target) == null) throw PlayerError("No road route there from here.")
+        u.automatedRoadConnectionDestination = target.position
+        u.action = Constants.connectRoadAction
+        u.automated = true
+        if (u.hasMovement()) UnitAutomation.automateUnitMoves(GameView(u.civ.gameInfo, u.civ).getMapUnitView(u))
+        return "🛣️ ${u.label()} is building a road there."
     }
 
     fun stepUnit(u: MapUnit, clock: Int): String {
@@ -304,6 +318,15 @@ object GameOps {
         if (!u.baseUnit.isAirUnit() && !u.isExploring() && u.hasMovement()) out += Choice("explore", "Explore", "Auto-explore the map", "🧭")
         if (u.canFortify() && !u.isFortified() && u.hasMovement()) out += Choice("fortify", "Fortify", "+defence, stays put", "🛡️")
         if (!u.canFortify() && !u.isSleeping() && u.hasMovement()) out += Choice("sleep", "Sleep", "Stays put until woken", "💤")
+        // "…until healed": wakes up automatically at full health
+        if (u.health < 100 && u.hasMovement() && u.canHealInCurrentTile()) {
+            if (u.canFortify() && !u.isFortifyingUntilHealed()) out += Choice("fortifyheal", "Fortify until healed", "Wakes at full health", "🩹")
+            if (!u.canFortify() && !u.isSleepingUntilHealed()) out += Choice("sleepheal", "Sleep until healed", "Wakes at full health", "🩹")
+        }
+        // Workers: build a road all the way to a tile or city (Unciv's "Connect road" automation)
+        val road = u.civ.gameInfo.ruleset.tileImprovements[com.unciv.logic.map.tile.RoadStatus.Road.name]
+        if (road != null && u.civ.tech.getBestRoadAvailable() != com.unciv.logic.map.tile.RoadStatus.None && u.canBuildImprovement(road))
+            out += Choice("ask:roadto", "Connect road to…", "Builds a road to a tile or city, over several turns", "🛣️")
         if (u.hasMovement()) out += Choice("skip", "Skip this turn", "", "⏭️")
         out += Choice("disband", "Disband unit", "Removes the unit", "🗑️")
         return out.sortedBy { if (it.id == "do:cp_undo") 0 else 1 } // ↩️ Undo always first
@@ -358,6 +381,8 @@ object GameOps {
                 return "🧭 $name is exploring."
             }
             id == "fortify" -> { u.fortify(); return "🛡️ $name fortified." }
+            id == "fortifyheal" -> { u.fortifyUntilHealed(); return "🩹 $name fortifies until healed." }
+            id == "sleepheal" -> { u.action = UnitActionType.SleepUntilHealed.value; return "🩹 $name sleeps until healed." }
             id == "sleep" -> { u.action = UnitActionType.Sleep.value; return "💤 $name is sleeping." }
             id == "skip" -> { u.due = false; return "⏭️ $name skips this turn." }
             id == "disband" -> { u.disband(); return "🗑️ $name disbanded." }
