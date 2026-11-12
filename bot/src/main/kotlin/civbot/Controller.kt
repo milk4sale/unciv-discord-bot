@@ -322,16 +322,24 @@ class Controller(val store: Store) {
     class Proposal(
         val gid: String, val kind: String, val fromCiv: String, val toCiv: String,
         val give: List<String> = emptyList(), val ask: List<String> = emptyList(), val text: String = "",
-    ) { val id = java.lang.Long.toString(System.nanoTime() % 2176782336L, 36) }
+        val id: String = java.lang.Long.toString(System.nanoTime() % 2176782336L, 36),
+    )
 
     val proposals = ConcurrentHashMap<String, Proposal>()
     /** Proposals the bot still has to post */
     val outbox = java.util.concurrent.ConcurrentLinkedQueue<Proposal>()
-    private fun propose(p: Proposal) { proposals[p.id] = p; outbox += p }
+    private fun propose(p: Proposal) {
+        proposals[p.id] = p; outbox += p
+        store.sessions[p.gid]?.let { DiplomacyPlus.rememberProposal(it.meta, p) } // saved in the game metadata: survives a restart
+    }
+    /** A pending proposal by id (also after a restart: read back from the game metadata). Null once answered or withdrawn. */
+    fun findProposal(s: Session, id: String): Proposal? =
+        DiplomacyPlus.storedProposals(s.meta).firstOrNull { it.id == id }?.let { proposals[id] ?: it.also { p -> proposals[id] = p } }
 
     /** Accept or reject a proposal. Call on the engine thread. */
     fun answer(s: Session, p: Proposal, accept: Boolean): String {
         proposals.remove(p.id)
+        DiplomacyPlus.forgetProposal(s.meta, p.id); store.saveMeta(s.meta)
         val game = s.game!!
         val a = game.getCivilization(p.fromCiv); val b = game.getCivilization(p.toCiv)
         if (!accept) return when (p.kind) {

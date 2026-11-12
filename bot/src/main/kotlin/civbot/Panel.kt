@@ -361,7 +361,7 @@ object Panel {
                 endRow += btn(gid, "trade", "Propose deal", "🤝", 1, myTurn && other != null && (st.give.isNotEmpty() || st.ask.isNotEmpty()))
                 // War/Denounce open DiplomacyPlus's ⚠️ confirm step; Peace shows the post-war lock (like Unciv)
                 endRow += if (atWar) btn(gid, "peace", DiplomacyPlus.peaceLabel(civ, other!!), "🕊️", 3, myTurn && DiplomacyPlus.peaceBlocker(civ, other) == null)
-                else btn(gid, "dp_war", other?.let { DiplomacyPlus.warLabel(civ, it) } ?: "War", "🔥", 4, myTurn && other != null)
+                else btn(gid, "dp_war", other?.let { DiplomacyPlus.warLabel(civ, it) } ?: "War", "🔥", 4, myTurn && other != null && DiplomacyPlus.warBlockedByRules(civ) == null)
                 endRow += btn(gid, "friend", "Friendship", "💛", 2, myTurn && other != null && Features.friendshipAvailable(civ, other))
                 endRow += btn(gid, "dp_denounce", "Denounce", "😠", 2, myTurn && other != null && Features.canDenounce(civ, other))
                 includeAdvisor = false
@@ -382,12 +382,13 @@ object Panel {
                     if (others.isNotEmpty()) eb.addField("Others", others, false)
                 }
                 rows += ActionRow.of(select(id(gid, "selcs"), "Choose a city-state…",
-                    css.map { Choice("cs:${it.civID}", it.civName, "${it.cityStateType.name} · influence ${it.getDiplomacyManager(civ)?.getInfluence()?.toInt() ?: 0}", "🏰") },
+                    css.map { Choice("cs:${it.civID}", it.civName, "${it.cityStateType.name} · influence ${it.getDiplomacyManager(civ)?.getInfluence()?.toInt() ?: 0}" +
+                        DiplomacyPlus.questMark(civ, it).let { q -> if (q != null) " · $q" else "" }, if (DiplomacyPlus.questMark(civ, it) != null) "❗" else "🏰") },
                     cs?.let { "cs:${it.civID}" }))
                 rows += ActionRow.of(select(id(gid, "csact"), "Gift, protect, demand tribute…", cs?.let { Features.cityStateChoices(civ, it) } ?: emptyList(), enabled = myTurn))
                 if (cs != null) {
                     endRow += if (civ.isAtWarWith(cs)) btn(gid, "peace", DiplomacyPlus.peaceLabel(civ, cs), "🕊️", 3, myTurn && DiplomacyPlus.peaceBlocker(civ, cs) == null, "cs")
-                    else btn(gid, "dp_war", DiplomacyPlus.warLabel(civ, cs), "🔥", 4, myTurn, "cs")
+                    else btn(gid, "dp_war", DiplomacyPlus.warLabel(civ, cs), "🔥", 4, myTurn && DiplomacyPlus.warBlockedByRules(civ) == null, "cs")
                 }
                 file = cs?.getCapital()?.let { mapFile(game, civ, st, it.getCenterTile(), Overlay(selectedTile = it.getCenterTile())) } ?: wholeMapFile(game, civ)
             }

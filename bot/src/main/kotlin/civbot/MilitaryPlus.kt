@@ -488,6 +488,8 @@ object MilitaryPlus : Extension {
         }
         if (ais.size >= 2 && setup.extraCities.size >= 2) {
             val ai1 = ais[0]; val ai2 = ais[1]; val target3 = ais.getOrElse(2) { ai2 }
+            // deals to AIs are decided on the AI's turn (DiplomacyPlus.offerToAI): run that part of its turn now
+            fun aiTurn() = t.eng { com.unciv.logic.automation.civilization.TradeAutomation.respondToTradeRequests(ai1, true) }
             t.act(a, "tab", emptyList(), "DIPLOMACY", null)
             t.act(a, "selciv", emptyList(), "civ:${ai1.civID}", null)
             // City to an AI
@@ -496,7 +498,7 @@ object MilitaryPlus : Extension {
             val cityChoice = give.firstOrNull { it.id.contains("~City~") && it.id.endsWith(cityId) }
             if (cityChoice != null) {
                 t.act(a, "give", emptyList(), cityChoice.id, null)
-                t.act(a, "trade", emptyList(), null, null); lastFlash()
+                t.act(a, "trade", emptyList(), null, null); lastFlash(); aiTurn()
                 if (t.eng { g -> g.getCities().first { it.id == cityId }.civ == ai1 }) tick("deal: city traded (AI)")
             } else say("no City offer for AI (give: ${give.map { it.label }})")
             // AI declares war on a third civ (paid with gold); else we declare war as our side of the deal
@@ -504,14 +506,14 @@ object MilitaryPlus : Extension {
             val gold = give.filter { it.id.contains("~Gold~") }.maxByOrNull { it.id.split("~")[2].toInt() }
             if (warAsk != null) {
                 t.act(a, "ask", emptyList(), warAsk.id, null); if (gold != null) t.act(a, "give", emptyList(), gold.id, null)
-                t.act(a, "trade", emptyList(), null, null); lastFlash()
+                t.act(a, "trade", emptyList(), null, null); lastFlash(); aiTurn()
             }
             if (warAsk != null && t.eng { ai1.isAtWarWith(ai2) }) tick("deal: AI declares war on a third civ")
             else {
                 val (give2, _) = t.eng { g -> Features.tradeChoices(GameOps.civOf(g, a), ai1) }
                 val wd = give2.firstOrNull { it.id.contains("~WarDeclaration~") && it.id.endsWith(ai2.civID) }
                 if (wd != null) {
-                    t.act(a, "give", emptyList(), wd.id, null); t.act(a, "trade", emptyList(), null, null); lastFlash()
+                    t.act(a, "give", emptyList(), wd.id, null); t.act(a, "trade", emptyList(), null, null); lastFlash(); aiTurn()
                     if (t.eng { g -> GameOps.civOf(g, a).isAtWarWith(ai2) }) tick("deal: war declaration (AI, we join)")
                 } else say("no WarDeclaration offer (ask: ${ask.map { it.label }})")
             }

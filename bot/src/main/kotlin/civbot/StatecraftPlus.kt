@@ -472,7 +472,8 @@ object StatecraftPlus : Extension {
             if (!runCatching { TradeEvaluation().isTradeValid(r.trade, civ, o) }.getOrDefault(false)) return@mapNotNull null
             val tl = TradeLogic(civ, o).apply { currentTrade.set(r.trade) }
             Item("t:${r.requestingCiv}:$n", "**${o.civName}** proposes a deal: ${Features.describeTrade(tl)}",
-                listOf("yes" to "Sounds good! (accept ${o.civName}'s deal)", "no" to "Not this time. (decline ${o.civName}'s deal)"), "🤝")
+                listOf("yes" to "Sounds good! (accept ${o.civName}'s deal)", "no" to "Not this time. (decline ${o.civName}'s deal)",
+                    "else" to "How about something else… (counter it in the deal builder)"), "🤝")
         }
     }
 
@@ -531,7 +532,7 @@ object StatecraftPlus : Extension {
             val opts = decisions.take(10).flatMapIndexed { i, d ->
                 d.options.map { (opt, label) ->
                     Choice("sp:${d.key}|$opt", "${i + 1}. $label".take(100), (d.details[opt] ?: GameOps.clean(d.text.replace("*", "").replace("_", ""))).take(100),
-                        when { opt in setOf("yes", "lib", "keep", "annex", "puppet") -> "✅"; opt == "war" -> "⚔️"; opt == "no" -> "❌"; d.key.startsWith("ev:") -> "📜"; else -> "▫️" })
+                        when { opt in setOf("yes", "lib", "keep", "annex", "puppet") -> "✅"; opt == "war" -> "⚔️"; opt == "no" -> "❌"; opt == "else" -> "✏️"; d.key.startsWith("ev:") -> "📜"; else -> "▫️" })
                 }
             }
             t.rows += ActionRow.of(t.select("sp_ans", if (t.myTurn) "Answer…" else "Answer on your turn", opts, enabled = t.myTurn))
@@ -557,6 +558,8 @@ object StatecraftPlus : Extension {
             // TradePopup / WorldScreen: offers that became invalid are dropped
             if (!TradeEvaluation().isTradeValid(req.trade, civ, o))
                 throw PlayerError("That deal isn't possible any more (things changed), so it was removed.")
+            // TradePopup's "How about something else...": open the deal builder with their offer in it
+            if (opt == "else") { DiplomacyPlus.counterInBuilder(ctx, o, req.trade); return }
             if (opt == "yes") {
                 val tl = TradeLogic(civ, o); tl.currentTrade.set(req.trade)
                 val text = Features.describeTrade(tl)
