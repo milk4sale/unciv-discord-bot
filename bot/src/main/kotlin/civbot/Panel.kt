@@ -29,7 +29,10 @@ enum class Tab(val label: String, val emoji: String, val hint: String) {
 
 /** Per-player UI state for the private control panel (kept in memory only). */
 class PanelState {
-    var tab = Tab.UNITS
+    /** Tab id: a [Tab] name or an extension tab id */
+    var tab = Tab.UNITS.name
+    /** Scratch state for extensions (see ActionCtx.ext) */
+    val ext = HashMap<String, Any>()
     var unitId: Int? = null
     var cityId: String? = null
     var otherCivId: String? = null
@@ -126,16 +129,18 @@ object Panel {
         ).append('\n').append(statsLine(civ))
         civ.tech.currentTechnologyName()?.let { desc.append("\n🔬 ").append(it).append(" (").append(civ.tech.turnsToTech(it)).append(" turns)") }
         eb.setDescription(desc.toString().take(4000))
-        if (myTurn && st.tab != Tab.OVERVIEW) {
+        if (myTurn && st.tab != Tab.OVERVIEW.name) {
             val news = GameOps.turnNotifications(civ, 6)
             if (news.isNotEmpty()) eb.addField("📰 News", news.joinToString("\n").take(1024), false)
         }
 
         val rows = ArrayList<ActionRow>()
         rows += ActionRow.of(StringSelectMenu.create(id(gid, "tab")).setPlaceholder("Open a tab…")
-            .addOptions(Tab.entries.map { t ->
-                SelectOption.of(t.label, t.name).withEmoji(Emoji.fromUnicode(t.emoji)).withDescription(t.hint).withDefault(t == st.tab)
-            }).build())
+            .addOptions((Tab.entries.map { t ->
+                SelectOption.of(t.label, t.name).withEmoji(Emoji.fromUnicode(t.emoji)).withDescription(t.hint).withDefault(t.name == st.tab)
+            } + Extensions.all.flatMap { it.tabs }.filter { runCatching { it.visible(civ) }.getOrDefault(false) }.map { t ->
+                SelectOption.of(t.label, t.id).withEmoji(Emoji.fromUnicode(t.emoji)).withDescription(t.hint.take(100)).withDefault(t.id == st.tab)
+            }).take(25)).build())
 
         // Decisions that come before anything else
         var file: FileUpload? = null
@@ -157,7 +162,7 @@ object Panel {
         val endRow = ArrayList<Button>()
         var includeAdvisor = true
 
-        when (st.tab) {
+        when (Tab.entries.firstOrNull { it.name == st.tab }) {
             Tab.UNITS -> {
                 val units = GameOps.unitsOf(civ)
                 var unit: MapUnit? = st.unitId?.let { GameOps.unitById(civ, it) }
@@ -230,6 +235,7 @@ object Panel {
                     }
                     cityActs += GameOps.buyChoices(city).take(9)
                     cityActs += Features.faithBuyChoices(city).take(4)
+                    cityActs += Extensions.all.flatMap { runCatching { it.cityChoices(city, st.window) }.getOrDefault(emptyList()) }
                     cityActs += Features.cityExtraChoices(city, st.window)
                 }
                 rows += ActionRow.of(select(id(gid, "cact"), if (cityActs.isEmpty()) "No city actions right now" else "Buy, bombard, focus, tiles, raze…", cityActs.take(25), enabled = myTurn))
@@ -371,10 +377,18 @@ object Panel {
                 endRow += listOf(pan(8, "↙"), pan(6, "⬇"), pan(4, "↘"),
                     btn(gid, "whole", if (st.wholeMap) "Zoomed" else "World", if (st.wholeMap) "🔎" else "🌍"))
             }
+            null -> {
+                val ext = Extensions.tab(st.tab)
+                if (ext == null) { st.tab = Tab.UNITS.name; return render(session, seat, st) }
+                val tc = TabCtx(session, seat, st, game, civ, myTurn, eb, rows, endRow)
+                try { ext.first.renderTab(st.tab, tc) } catch (e: PlayerError) { eb.addField("❌", e.message ?: "", false) }
+                file = tc.file
+                includeAdvisor = tc.includeAdvisor
+            }
         }
 
         val warnings = if (myTurn) GameOps.turnWarnings(civ) else emptyList()
-        if (warnings.isNotEmpty() && st.tab != Tab.OVERVIEW)
+        if (warnings.isNotEmpty() && st.tab != Tab.OVERVIEW.name)
             eb.addField(if (st.confirmEnd) "⚠️ Still to do (click End anyway to skip)" else "📝 This turn", warnings.joinToString("\n") { "• $it" }, false)
         eb.setFooter("Game ${meta.id} · tiles are labelled like D5 · only you can see this panel")
         if (file != null) eb.setImage("attachment://map.png")
@@ -384,6 +398,13 @@ object Panel {
         rows += ActionRow.of(endRow.takeLast(5))
         return Rendered(eb.build(), rows.take(5), file)
     }
+
+    // Public helpers for extensions (TabCtx)
+    fun selectPublic(customId: String, placeholder: String, choices: List<Choice>, selected: String?, enabled: Boolean) = select(customId, placeholder, choices, selected, enabled)
+    fun multiSelectPublic(customId: String, placeholder: String, choices: List<Choice>, selected: List<String>, enabled: Boolean) = multiSelect(customId, placeholder, choices, selected, enabled)
+    fun btnPublic(gid: String, verb: String, label: String, emoji: String, style: Int, enabled: Boolean, vararg args: String) = btn(gid, verb, label, emoji, style, enabled, *args)
+    fun mapFilePublic(game: GameInfo, civ: Civilization, st: PanelState, center: Tile, overlay: Overlay) = mapFile(game, civ, st, center, overlay)
+    fun wholeMapFilePublic(game: GameInfo, civ: Civilization) = wholeMapFile(game, civ)
 
     private fun mapFile(game: GameInfo, civ: Civilization, st: PanelState, center: Tile,
                         overlay: Overlay, window: MapWindow = MapWindow(center.position)): FileUpload {

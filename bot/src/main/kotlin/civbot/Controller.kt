@@ -46,9 +46,10 @@ class Controller(val store: Store) {
             var result: TurnResult? = null
             if (verb != "end") st.confirmEnd = false
             val citiesBefore = civ.cities.map { it.id }.toSet()
+            if (mine && verb !in VIEW_VERBS) Extensions.all.forEach { it.beforeMutation(s, seat, verb) }
 
             when (verb) {
-                "tab" -> st.tab = Tab.valueOf(args.firstOrNull() ?: value!!)
+                "tab" -> st.tab = args.firstOrNull() ?: value!!
                 "refresh" -> {}
                 // ---- units
                 "selunit" -> st.unitId = value?.removePrefix("u:")?.toIntOrNull()
@@ -88,7 +89,7 @@ class Controller(val store: Store) {
                             val (x, y) = v.removePrefix("bomb:").split(",").map { it.toInt() }
                             GameOps.bombard(c, game.tileMap[x, y])
                         }
-                        else -> Features.doCityExtra(c, v)
+                        else -> Extensions.all.firstNotNullOfOrNull { it.doCityChoice(c, v) } ?: Features.doCityExtra(c, v)
                     }
                     changed = true
                 }
@@ -185,7 +186,11 @@ class Controller(val store: Store) {
                         result = endTurn(s)
                     }
                 }
-                else -> throw PlayerError("Unknown action.")
+                else -> {
+                    val ctx = ActionCtx(s, seat, st, game, civ, mine, args, value)
+                    if (!Extensions.all.any { it.handle(verb, ctx) }) throw PlayerError("Unknown action.")
+                    changed = ctx.changed
+                }
             }
             if (verb in setOf("uact", "step", "goto")) {
                 Features.flagNewConquests(civ, citiesBefore)
@@ -193,6 +198,20 @@ class Controller(val store: Store) {
             }
             if (changed && result == null) store.saveGame(s)
             result
+        }
+    }
+
+    companion object {
+        /** Panel verbs that only change what's shown (no game-state change, no undo snapshot) */
+        val VIEW_VERBS = setOf("tab", "refresh", "selunit", "nextunit", "selcity", "cprev", "cnext", "qmode", "relname",
+            "belief", "selciv", "give", "ask", "selcs", "pan", "home", "whole", "inspect", "end")
+        fun resolveTileFor(game: com.unciv.logic.GameInfo, civ: com.unciv.logic.civilization.Civilization, st: PanelState,
+                           input: String, fallbackCenter: com.unciv.logic.map.HexCoord): com.unciv.logic.map.tile.Tile {
+            val window = st.window ?: MapWindow(fallbackCenter)
+            return window.parse(input)?.let { (c, r) ->
+                game.tileMap.values.firstOrNull { t -> window.cell(t.position.x, t.position.y) == Pair(c, r) }
+            } ?: game.getCities().firstOrNull { it.name.equals(input.trim(), true) && it.getCenterTile().isExplored(civ) }?.getCenterTile()
+            ?: throw PlayerError("Couldn't find tile **$input**. Use a code from the map, like D5, or a city name you've seen.")
         }
     }
 
@@ -237,6 +256,7 @@ class Controller(val store: Store) {
             }
         }
         val game = s.game!!
+        Extensions.all.forEach { runCatching { it.onTurnEnded(s) }.onFailure { e -> log.warn("onTurnEnded failed", e) } }
         // AI-controlled seats (players who left) get played automatically
         var guard = 0
         while (guard++ < 50) {

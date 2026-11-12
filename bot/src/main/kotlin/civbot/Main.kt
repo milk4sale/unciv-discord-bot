@@ -26,6 +26,7 @@ fun main(args: Array<String>) {
     val uncivDir = File(env["UNCIV_DIR"] ?: File(home, "unciv").path)
     val dataDir = File(env["CIVBOT_DATA"] ?: File(home, "data").path)
     Engine.init(uncivDir)
+    Engine.run { Extensions.all.forEach { e -> runCatching { e.onEngineInit() }.onFailure { log.error("extension init failed", it) } } }
 
     if (args.firstOrNull() == "--selftest") {
         SelfTest.run(File(args.getOrNull(1) ?: File(home, "selftest-out").path))

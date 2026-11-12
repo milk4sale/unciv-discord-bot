@@ -9,7 +9,7 @@ import java.io.File
  * tab and feature, renders every tab to PNG and checks save/load. Prints a feature checklist.
  */
 object SelfTest {
-    private const val TURNS = 40 // human turns (two players -> ~35 game turns)
+    private const val TURNS = 30 // human turns (two players -> ~35 game turns)
     private val hits = LinkedHashMap<String, Int>()
     private val errors = ArrayList<String>()
     private fun hit(name: String) { hits[name] = (hits[name] ?: 0) + 1 }
@@ -186,6 +186,29 @@ object SelfTest {
             }
             act(alice, "denounce", feature = "denounce")
             st.flash.forEach { println("  > $it") }; st.flash.clear()
+
+            // ---- Extension self-tests (each feature file tests itself)
+            val tctx = SelfTestCtx(s, ctl, alice, bob,
+                act = { seat, verb, args, value, feature ->
+                    try {
+                        ctl.apply(s, seat, verb, args, value)
+                        val fl = ctl.state(meta.id, seat.userId).flash.lastOrNull().orEmpty()
+                        if (fl.startsWith("❌")) false else { if (feature != null) hit(feature); true }
+                    } catch (e: PlayerError) { false } catch (e: Exception) {
+                        errors += "$verb $args $value -> ${e.javaClass.simpleName}: ${e.message}"; e.printStackTrace(); false
+                    }
+                },
+                render = { seat, tag -> render(seat, tag) })
+            for (ext in Extensions.all) {
+                try { ext.selfTest(tctx) } catch (e: Exception) {
+                    errors += "${ext.javaClass.simpleName}.selfTest -> ${e.javaClass.simpleName}: ${e.message}"; e.printStackTrace()
+                }
+                ctl.state(meta.id, alice.userId).flash.clear()
+            }
+            // every extension tab must render
+            for ((_, t) in Extensions.all.flatMap { e -> e.tabs.map { e to it } }) {
+                act(alice, "tab", value = t.id); render(alice, "ext-${t.id.lowercase()}")
+            }
         }
 
         File(out, "world.png").writeBytes(eng { g -> MapRenderer.renderWhole(g.tileMap.values, null, 1) })

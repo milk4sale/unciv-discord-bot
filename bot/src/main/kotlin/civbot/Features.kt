@@ -66,11 +66,18 @@ object Features {
 
     private fun encode(o: TradeOffer, amount: Int) = "t~${o.type.name}~$amount~${o.name}".take(100)
 
-    private fun offerChoices(offers: List<TradeOffer>, side: String): List<Choice> {
+    private fun offerChoices(game: com.unciv.logic.GameInfo, offers: List<TradeOffer>, side: String): List<Choice> {
         val out = ArrayList<Choice>()
         for (o in offers) {
             when (o.type) {
-                TradeOfferType.City, TradeOfferType.WarDeclaration -> continue
+                TradeOfferType.City -> {
+                    val city = game.getCities().firstOrNull { it.id == o.name } ?: continue
+                    out += Choice("$side${encode(o, o.amount)}", "City: ${city.name}", "pop ${city.population.population} · ${city.civ.civName}", "🏙️")
+                }
+                TradeOfferType.WarDeclaration -> {
+                    val target = game.civilizations.firstOrNull { it.civID == o.name } ?: continue
+                    out += Choice("$side${encode(o, o.amount)}", "Declare war on ${target.civName}", "joins the war", "⚔️")
+                }
                 TradeOfferType.Gold -> listOf(50, 100, 250, 500).filter { it < o.amount }.plus(o.amount).distinct().forEach {
                     out += Choice("$side${encode(o, it)}", "$it gold", "one-off payment", "💰")
                 }
@@ -94,7 +101,7 @@ object Features {
     fun tradeChoices(civ: Civilization, other: Civilization): Pair<List<Choice>, List<Choice>> {
         if (civ.getDiplomacyManager(other) == null || other.isCityState) return emptyList<Choice>() to emptyList()
         val tl = TradeLogic(civ, other)
-        return offerChoices(tl.ourAvailableOffers.toList(), "g") to offerChoices(tl.theirAvailableOffers.toList(), "a")
+        return offerChoices(civ.gameInfo, tl.ourAvailableOffers.toList(), "g") to offerChoices(civ.gameInfo, tl.theirAvailableOffers.toList(), "a")
     }
 
     fun buildTrade(civ: Civilization, other: Civilization, give: List<String>, ask: List<String>): TradeLogic {
@@ -120,6 +127,8 @@ object Features {
                 TradeOfferType.Gold -> "${o.amount} gold"
                 TradeOfferType.Gold_Per_Turn -> "${o.amount} gold/turn"
                 TradeOfferType.Strategic_Resource, TradeOfferType.Stockpiled_Resource -> "${o.name} ×${o.amount}"
+                TradeOfferType.City -> "city of " + (tl.ourCivilization.gameInfo.getCities().firstOrNull { it.id == o.name }?.name ?: "?")
+                TradeOfferType.WarDeclaration -> "war on " + (tl.ourCivilization.gameInfo.civilizations.firstOrNull { it.civID == o.name }?.civName ?: "?")
                 else -> GameOps.clean(o.name)
             }
         }.ifEmpty { "nothing" }

@@ -88,6 +88,7 @@ object GameOps {
                 "Tiny" -> MapSize.Tiny; "Medium" -> MapSize.Medium; "Large" -> MapSize.Large; else -> MapSize.Small
             }
         }
+        Extensions.all.forEach { it.applyToSetup(setup, meta) }
         val game = GameStarter.startNewGame(setup)
         for (seat in meta.seats) {
             seat.civId = game.civilizations.first { it.playerId == "discord:${seat.userId}" }.civID
@@ -244,7 +245,7 @@ object GameOps {
             UnitActionType.ConductTradeMission, UnitActionType.FoundReligion, UnitActionType.EnhanceReligion,
             UnitActionType.SpreadReligion, UnitActionType.RemoveHeresy, UnitActionType.AddInCapital,
             UnitActionType.Transform, UnitActionType.SetUp, UnitActionType.Guard, UnitActionType.TriggerUnique,
-            UnitActionType.Paradrop,
+            UnitActionType.Paradrop, UnitActionType.GiftUnit,
         )
         for (type in engineTypes) {
             val actions = try { UnitActions.getUnitActions(u, type).toList() } catch (e: Exception) { emptyList() }
@@ -270,6 +271,9 @@ object GameOps {
             }
         }
         if (tile.improvementInProgress != null && u.isCivilian()) out += Choice("cancelimp", "Stop building ${tile.improvementInProgress}", "", "✖️")
+
+        // Extension actions (see Ext.kt)
+        for (e in Extensions.all) out += runCatching { e.unitChoices(u) }.getOrDefault(emptyList())
 
         // Escort: a civilian and a military unit on the same tile move together
         if (u.isEscorting()) out += Choice("unescort", "Stop escorting", "Units move separately again", "↔️")
@@ -340,6 +344,7 @@ object GameOps {
             id == "skip" -> { u.due = false; return "⏭️ $name skips this turn." }
             id == "disband" -> { u.disband(); return "🗑️ $name disbanded." }
         }
+        Extensions.all.firstNotNullOfOrNull { it.doUnitChoice(u, id) }?.let { return it }
         throw PlayerError("Unknown action.")
     }
 
@@ -591,9 +596,11 @@ object GameOps {
             NextTurnAutomation.chooseGreatPerson(civView)
             notes += "🌟 Advisor picked your free Great Person"
         }
-        if (civ.gameInfo.isReligionEnabled()) Engine.callHidden(ReligionAutomation, "chooseReligiousBeliefs", civ)
-        if (civ.gameInfo.isEspionageEnabled()) try { EspionageAutomation(civ).automateSpies() } catch (_: Exception) {}
-        Engine.callHidden(NextTurnAutomation, "tryVoteForDiplomaticVictory", civView)
+        val skip = Extensions.advisorSkips(civ)
+        if (civ.gameInfo.isReligionEnabled() && "beliefs" !in skip) Engine.callHidden(ReligionAutomation, "chooseReligiousBeliefs", civ)
+        if (civ.gameInfo.isEspionageEnabled() && "spies" !in skip) try { EspionageAutomation(civ).automateSpies() } catch (_: Exception) {}
+        if ("vote" !in skip) Engine.callHidden(NextTurnAutomation, "tryVoteForDiplomaticVictory", civView)
+        if ("alerts" in skip) { try { TradeAutomation.respondToTradeRequests(civ, true) } catch (_: Exception) {}; return notes }
         // AI demands / friendship / trade offers aimed at this player
         civ.popupAlerts.removeAll { it.type != AlertType.CityConquered && it.type != AlertType.DemandToStopSettlingCitiesNear && it.type != AlertType.DeclarationOfFriendship }
         Engine.callHidden(NextTurnAutomation, "respondToPopupAlerts", civView)

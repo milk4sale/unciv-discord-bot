@@ -32,7 +32,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /** Discord frontend: slash commands, lobby, public board, turn pings and the private panels. */
-class Bot(private val store: Store, private val ctl: Controller) : ListenerAdapter() {
+class Bot(override val store: Store, override val ctl: Controller) : ListenerAdapter(), BotApi {
     private val log = LoggerFactory.getLogger("Bot")
     private val workers = Executors.newFixedThreadPool(4) { r -> Thread(r, "civbot-worker").apply { isDaemon = true } }
     private val scheduler = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "civbot-timer").apply { isDaemon = true } }
@@ -74,7 +74,7 @@ class Bot(private val store: Store, private val ctl: Controller) : ListenerAdapt
                 SubcommandData("spectate", "Watch a game you're not playing in"),
                 SubcommandData("end", "End the game (host only)"),
                 SubcommandData("help", "How to play"),
-            )
+            ).addSubcommands(Extensions.all.flatMap { runCatching { it.commands() }.getOrDefault(emptyList()) })
         )
         // Register per server: updates apply instantly (global commands can take minutes and show
         // "This command is outdated"). Clear any old global copy so it doesn't appear twice.
@@ -132,13 +132,20 @@ class Bot(private val store: Store, private val ctl: Controller) : ListenerAdapt
                 event.reply("Really end **${s.meta.name}**? This can't be undone.").setEphemeral(true)
                     .addActionRow(Button.danger(Panel.id(s.meta.id, "endgame"), "Yes, end the game")).queue()
             }
-            else -> event.replyEmbeds(helpEmbed()).setEphemeral(true).queue()
+            else -> {
+                if (Extensions.all.any { runCatching { it.onCommand(event, this) }.getOrElse { e -> log.error("command failed", e); false } }) return
+                event.replyEmbeds(helpEmbed()).setEphemeral(true).queue()
+            }
         }
     }
 
+    // ---- BotApi (for extensions)
+    override fun async(block: () -> Unit) { workers.submit { runCatching(block).onFailure { log.error("extension task failed", it) } } }
+    override fun refreshLobby(meta: GameMeta) = lobbyMessageEdit(meta)
+
     private fun noGameHere() = "There's no game you're part of here. Use `/civ games` to find yours, or `/civ new` to start one."
 
-    private fun gameHere(channelId: String, userId: String): Session? {
+    override fun gameHere(channelId: String, userId: String): Session? {
         val here = store.byChannel(channelId)
         return here.firstOrNull { it.meta.seatOf(userId) != null && it.meta.status == Status.RUNNING }
             ?: here.firstOrNull { it.meta.seatOf(userId) != null }
@@ -201,7 +208,8 @@ class Bot(private val store: Store, private val ctl: Controller) : ListenerAdapt
             (if (st.fogOfWar) "🌫️ fog of war" else "👁️ no fog") +
             "\n🏺 starts in ${st.startEra} · 🏆 ${st.victoryTypes.ifEmpty { GameOps.VICTORIES }.joinToString()}" +
             (if (st.worldWrap) " · 🌐 world wrap" else "") +
-            (if (st.autoSkipHours > 0) "\n⏩ AFK turns auto-end after ${st.autoSkipHours}h" else ""), false)
+            (if (st.autoSkipHours > 0) "\n⏩ AFK turns auto-end after ${st.autoSkipHours}h" else "") +
+            Extensions.all.flatMap { runCatching { it.lobbyLines(meta) }.getOrDefault(emptyList()) }.joinToString("") { "\n$it" }, false)
         setFooter("Game ${meta.id} · only the host can change settings (⚙️ for more)")
     }.build()
 
@@ -584,6 +592,19 @@ class Bot(private val store: Store, private val ctl: Controller) : ListenerAdapt
         }
         val value = (event as? StringSelectInteractionEvent)?.values?.joinToString("\n")
         if (value == "none") return event.deferEdit().queue()
+        // Popups: a "prompt" button (args = verb[, arg]) or a select option valued "ask:<verb>[:<arg>]"
+        val ask = when {
+            verb == "prompt" -> args
+            value != null && value.startsWith("ask:") -> value.removePrefix("ask:").split(":", limit = 2)
+            else -> null
+        }
+        if (ask != null && ask.isNotEmpty()) {
+            val p = Extensions.prompt(ask[0]) ?: Prompt("Enter a value", "Value")
+            val input = TextInput.create("text", p.label.take(45), if (p.long) TextInputStyle.PARAGRAPH else TextInputStyle.SHORT)
+                .setPlaceholder(p.placeholder.take(100).ifEmpty { null }).setRequiredRange(1, if (p.long) 1000 else 100).build()
+            event.replyModal(Modal.create(Panel.id(gid, *ask.toTypedArray()), p.title.take(45)).addComponents(ActionRow.of(input)).build()).queue()
+            return
+        }
         event.deferEdit().queue()
         workers.submit { panelAction(event.hook, s, seat, verb, args, value) }
     }
@@ -593,7 +614,7 @@ class Bot(private val store: Store, private val ctl: Controller) : ListenerAdapt
         if (parts.size < 3 || parts[0] != Panel.P) return
         val s = store.sessions[parts[1]] ?: return event.reply("That game no longer exists.").setEphemeral(true).queue()
         val seat = s.meta.seatOf(event.user.id) ?: return event.reply("You're not playing in this game.").setEphemeral(true).queue()
-        val value = event.getValue("tile")?.asString ?: ""
+        val value = (event.getValue("tile") ?: event.getValue("text"))?.asString ?: ""
         event.deferEdit().queue()
         workers.submit { panelAction(event.hook, s, seat, parts[2], parts.drop(3), value) }
     }

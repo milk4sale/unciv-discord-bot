@@ -68,10 +68,14 @@ async function render(data) {
         b.textContent = (c.emoji ? c.emoji.name + " " : "") + (c.label || "");
         b.onclick = async () => {
           let value = null;
-          const verb = c.custom_id.split("|")[2];
+          const parts = c.custom_id.split("|"), verb = parts[2];
           if (verb === "goto" || verb === "inspect") {
             value = prompt(verb === "goto" ? "Move to which tile? (a code from the map like D5, or a city name)" : "Inspect which tile? (e.g. D5)");
             if (!value) return;
+          } else if (verb === "prompt") { // popup button: ids are c|gid|prompt|<verb>[|<arg>]
+            value = prompt(c.label || "Enter a value");
+            if (!value) return;
+            return act(["c", parts[1], ...parts.slice(3)].join("|"), value);
           }
           act(c.custom_id, value);
         };
@@ -83,6 +87,11 @@ async function render(data) {
           `<option value="${o.value}" ${o.default ? "selected" : ""}>${o.emoji ? o.emoji.name + " " : ""}${md(o.label)}${o.description ? " — " + md(o.description) : ""}</option>`).join("");
         s.onchange = () => {
           if (s.multiple) act(c.custom_id, [...s.selectedOptions].map(o => o.value).filter(Boolean).join("\n"));
+          else if (s.value && s.value.startsWith("ask:")) { // option that opens a popup: ask:<verb>[:<arg>]
+            const [verb, arg] = s.value.slice(4).split(/:(.*)/s);
+            const text = prompt(s.selectedOptions[0].textContent.trim() || "Enter a value");
+            if (text) act(["c", c.custom_id.split("|")[1], verb, ...(arg ? [arg] : [])].join("|"), text);
+          }
           else if (s.value) act(c.custom_id, s.value);
         };
         div.appendChild(s);
