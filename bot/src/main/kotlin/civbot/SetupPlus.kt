@@ -24,14 +24,26 @@ import com.unciv.models.metadata.Player
 import com.unciv.models.ruleset.Ruleset
 import com.unciv.models.ruleset.RulesetCache
 import com.unciv.models.ruleset.unique.UniqueType
+import net.dv8tion.jda.api.EmbedBuilder
+import net.dv8tion.jda.api.JDA
 import net.dv8tion.jda.api.Permission
+import net.dv8tion.jda.api.entities.MessageEmbed
+import net.dv8tion.jda.api.entities.channel.middleman.MessageChannel
+import net.dv8tion.jda.api.entities.emoji.Emoji
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent
+import net.dv8tion.jda.api.events.interaction.component.ButtonInteractionEvent
+import net.dv8tion.jda.api.hooks.ListenerAdapter
 import net.dv8tion.jda.api.interactions.InteractionHook
+import net.dv8tion.jda.api.interactions.components.ActionRow
+import net.dv8tion.jda.api.interactions.components.buttons.Button
+import net.dv8tion.jda.api.interactions.components.selections.SelectOption
+import net.dv8tion.jda.api.interactions.components.selections.StringSelectMenu
 import net.dv8tion.jda.api.interactions.commands.OptionType
 import net.dv8tion.jda.api.interactions.commands.build.OptionData
 import net.dv8tion.jda.api.interactions.commands.build.SubcommandData
 import net.dv8tion.jda.api.interactions.commands.build.SubcommandGroupData
 import net.dv8tion.jda.api.utils.FileUpload
+import net.dv8tion.jda.api.utils.messages.MessageCreateBuilder
 import net.dv8tion.jda.api.utils.messages.MessageEditBuilder
 import org.slf4j.LoggerFactory
 import java.io.File
@@ -47,8 +59,14 @@ import java.util.concurrent.TimeUnit
  *    civ / city-state counts, random nations pool, civilization stats), MapParametersTable (size incl. Huge,
  *    every map type, shape, resources, water level, mirroring, ruins, natural wonders, strategic balance,
  *    legendary start, seed, advanced sliders) and the player picker (specific AI nations, shuffled order).
- *  - `/civ save export` (any player): the game as an Unciv save file (Engine.serialize = Unciv's own format).
+ *  - `/civ save export`: the game as an Unciv save file (Engine.serialize = Unciv's own format). A save shows the whole
+ *    unfogged map, so mid-game it's only for the host when the lobby turned `allow_export` on (`/civ lobby`), or for a
+ *    lone human against the AI; anyone in the game may export once it has ended.
  *  - `/civ save import file:` (host or Manage Server, lobby only): start the lobby's game from an Unciv save.
+ *  - Lobby lists (difficulties, speeds, eras, victories, nations with leader + ability, city-state maximum) come from the
+ *    lobby's ruleset ([rules]); custom map sizes (radius or width × height) and the "Random" map type pool.
+ *  - Turn history: the last [HISTORY_KEEP] start-of-turn snapshots per game in data/<id>.history/ (like Unciv's autosaves);
+ *    `/civ rollback turn:` (host; every human player must accept) restores one.
  *
  * Settings live in meta.settings.extra under "su_*" keys (map size / type and the AI count use the core fields).
  */
@@ -71,6 +89,18 @@ object SetupPlus : Extension {
     const val K_IMPORT = "su_import"
     const val K_IMPORT_INFO = "su_importInfo"
     const val K_IMPORT_CIVS = "su_importCivs"
+    /** "r=<radius>" or "w=<width>,h=<height>" when map size is [CUSTOM_SIZE] */
+    const val K_CUSTOM_SIZE = "su_customSize"
+    /** Map types "Random" may pick from (empty = all, like Unciv's checkbox list) */
+    const val K_RANDOM_TYPES = "su_randTypes"
+    /** "true": the host may export the save mid-game (players see this in the lobby before joining) */
+    const val K_ALLOW_EXPORT = "su_allowExport"
+    const val CUSTOM_SIZE = MapSize.custom
+    /** Start-of-turn snapshots kept per game for /civ rollback */
+    const val HISTORY_KEEP = 10
+    /** Unciv's MapParametersTable warnings: LARGE_MAP_TILES / VERY_LARGE_MAP_TILES */
+    private const val LARGE_TILES = 4000
+    private const val VERY_LARGE_TILES = 16000
 
     const val MAX_SAVE_BYTES = 20L * 1024 * 1024
     /** Discord accepts 10 MB uploads from bots everywhere */
@@ -167,14 +197,153 @@ object SetupPlus : Extension {
     private fun pickableMajors(rs: Ruleset) = rs.nations.values.filter { it.isMajorCiv && !it.hasUnique(UniqueType.WillNotBeChosenForNewGames) }.map { it.name }
     private fun pickableCityStates(rs: Ruleset) = rs.nations.values.count { it.isCityState && !it.hasUnique(UniqueType.WillNotBeChosenForNewGames) }
 
+    // ================================================================== the lobby's ruleset lists (base + selected mods)
+
+    /** A nation as the lobby's picker shows it (Unciv's NationTable: leader + unique ability). */
+    class NationInfo(val name: String, val leader: String, val abilityName: String, val ability: String) {
+        /** One line for a select option (max 100 chars) */
+        val description: String get() = cut(listOf(leader.takeIf { it.isNotEmpty() }?.let { "👑 $it" },
+            (if (abilityName.isNotEmpty()) "$abilityName: " else "") + ability).filterNotNull().filter { it.isNotBlank() }.joinToString(" · "), 100)
+    }
+
+    /** What the lobby may offer for this ruleset (Unciv's GameOptionsTable lists). */
+    class LobbyRules(val difficulties: List<String>, val speeds: List<String>, val eras: List<String>, val victories: List<String>,
+                     val maxCityStates: Int, val nations: List<NationInfo>, internal val ruleset: Ruleset) {
+        fun nation(name: String) = nations.firstOrNull { it.name.equals(name, true) }
+    }
+
+    private val rulesCache = java.util.concurrent.ConcurrentHashMap<String, LobbyRules>()
+    private fun rulesKey(meta: GameMeta) =
+        (meta.settings.extra[ModsPlus.K_BASE]?.takeIf { !isDefaultWord(it) } ?: DEFAULT_BASE) + "|" + meta.settings.mods.joinToString("|")
+    /** Forget cached lists (mods were installed / removed). */
+    fun clearRulesCache() = rulesCache.clear()
+    private fun onEngineThread() = Thread.currentThread().name == "unciv-engine"
+    private fun cut(s: String, n: Int) = if (s.length <= n) s else s.take(n - 1).trimEnd() + "…"
+
+    /** Any thread: the lobby's lists (cached; built on the engine thread on a miss). */
+    fun rules(meta: GameMeta): LobbyRules = rulesCache[rulesKey(meta)] ?: if (onEngineThread()) rulesE(meta) else Engine.run { rulesE(meta) }
+
+    /** Engine thread. */
+    fun rulesE(meta: GameMeta): LobbyRules = rulesCache.getOrPut(rulesKey(meta)) {
+        val rs = rulesetE(meta)
+        val eras = rs.eras.keys.toList().let { if (rs.modOptions.hasUnique(UniqueType.CanOnlyStartFromStartingEra)) it.take(1) else it }
+        val nations = rs.nations.values.filter { it.isMajorCiv && !it.hasUnique(UniqueType.WillNotBeChosenForNewGames) }.map { n ->
+            val ability = n.uniqueText.takeIf { it.isNotBlank() }?.let { InfoPlus.tx(it) }
+                ?: n.uniques.joinToString("; ") { InfoPlus.tx(it) }
+            NationInfo(n.name, InfoPlus.tx(n.leaderName), InfoPlus.tx(n.uniqueName), ability)
+        }.sortedBy { it.name }
+        LobbyRules(rs.difficulties.keys.toList(), rs.speeds.keys.toList(), eras, rs.selectableVictories().map { it.name },
+            pickableCityStates(rs), nations, rs)
+    }
+
+    /** Engine thread. Puts lobby values that the (new) ruleset doesn't have back to sane defaults; returns notes. */
+    fun normalizeE(meta: GameMeta): List<String> {
+        val r = rulesE(meta)
+        val st = meta.settings
+        val notes = ArrayList<String>()
+        if (r.difficulties.isNotEmpty() && st.difficulty !in r.difficulties) {
+            val d = "Prince".takeIf { it in r.difficulties } ?: r.difficulties[r.difficulties.size / 2]
+            notes += "⚖️ These rules have no **${st.difficulty}** difficulty — set to **$d**."; st.difficulty = d
+        }
+        if (r.speeds.isNotEmpty() && st.speed !in r.speeds) {
+            val sp = listOf("Quick", "Standard").firstOrNull { it in r.speeds } ?: r.speeds.first()
+            notes += "⏱️ These rules have no **${st.speed}** speed — set to **$sp**."; st.speed = sp
+        }
+        if (r.eras.isNotEmpty() && st.startEra !in r.eras) {
+            notes += "🏺 These rules can't start in the **${st.startEra}** — starting in the **${r.eras.first()}**."; st.startEra = r.eras.first()
+        }
+        if (st.victoryTypes.isNotEmpty()) {
+            val keep = st.victoryTypes.filter { it in r.victories }
+            if (keep.size != st.victoryTypes.size) {
+                notes += "🏆 Victory types not in these rules were dropped (${st.victoryTypes.filter { it !in r.victories }.joinToString()})" + if (keep.isEmpty()) " — all victories are on." else "."
+                st.victoryTypes = ArrayList(keep)
+            }
+        }
+        if (st.cityStates > r.maxCityStates) { notes += "🏰 These rules have ${r.maxCityStates} city-states — lowered from ${st.cityStates}."; st.cityStates = r.maxCityStates }
+        for (seat in meta.seats) if (seat.nation != Constants.random && r.nation(seat.nation) == null) {
+            notes += "🏳️ <@${seat.userId}>'s nation **${seat.nation}** isn't in these rules — back to random."; seat.nation = Constants.random
+        }
+        return notes
+    }
+
+    /** A select option for the lobby (Bot builds the Discord component). */
+    data class LobbyOption(val label: String, val value: String, val default: Boolean)
+
+    private const val CS_PAGE = 23
+
+    /** Pages of the lobby's city-state dropdown: 0 … the ruleset's maximum, 23 per page plus ◀/▶ ("pg:<n>") entries. */
+    fun cityStateOptions(meta: GameMeta, page: Int = -1): List<LobbyOption> {
+        val max = rules(meta).maxCityStates
+        val cur = meta.settings.cityStates
+        fun opt(n: Int) = LobbyOption(if (n == 0) "No city-states" else "$n city-states", n.toString(), n == cur)
+        if (max + 1 <= 25) return (0..max).map { opt(it) }
+        val pages = (max + CS_PAGE) / CS_PAGE   // values 0..max
+        val p = (if (page >= 0) page else cur / CS_PAGE).coerceIn(0, pages - 1)
+        val out = ArrayList<LobbyOption>()
+        if (p > 0) out += LobbyOption("◀ ${(p - 1) * CS_PAGE}–${p * CS_PAGE - 1} city-states", "pg:${p - 1}", false)
+        for (n in p * CS_PAGE..minOf(max, (p + 1) * CS_PAGE - 1)) out += opt(n)
+        if (p < pages - 1) out += LobbyOption("▶ ${(p + 1) * CS_PAGE}–${minOf(max, (p + 2) * CS_PAGE - 1)} city-states", "pg:${p + 1}", false)
+        return out
+    }
+
+    /** Most city-states this lobby can have (Unciv's slider maximum: the ruleset's pickable city-states). */
+    fun maxCityStates(meta: GameMeta): Int = rules(meta).maxCityStates
+
+    // ---- nation picker (lobby): Unciv's player picker hides "Will not be chosen for new games" nations
+
+    /** Up to 4 nation selects ([verb] gets each picked value) + an optional "Nation details…" button row. */
+    fun nationPickerRows(meta: GameMeta, uid: String, verb: String = "pick", withDetails: Boolean = true, withRandom: Boolean = true): List<ActionRow> {
+        val taken = meta.seats.filter { it.userId != uid }.map { it.nation }.toSet()
+        val nations = rules(meta).nations.filter { it.name !in taken }
+        val rows = ArrayList<ActionRow>()
+        for ((i, chunk) in nations.chunked(24).take(4).withIndex()) {
+            val opts = ArrayList<SelectOption>()
+            if (i == 0 && withRandom) opts += SelectOption.of(Constants.random, Constants.random).withDescription("🎲 Any nation — decided when the game starts")
+            for (n in chunk) opts += SelectOption.of(n.name.take(100), n.name.take(100)).let { o -> n.description.takeIf { it.isNotEmpty() }?.let { o.withDescription(it) } ?: o }
+            rows += ActionRow.of(StringSelectMenu.create(Panel.id(meta.id, verb, i.toString()))
+                .setPlaceholder("Nations ${chunk.first().name.first()}–${chunk.last().name.first()}").addOptions(opts).build())
+        }
+        if (withDetails) rows += ActionRow.of(Button.secondary(Panel.id(meta.id, "ndet"), "Nation details…").withEmoji(Emoji.fromUnicode("📖")))
+        return rows
+    }
+
+    /** Unciv's NationTable as an embed: leader, ability, start bias, unique units/buildings/improvements. */
+    fun nationDetails(meta: GameMeta, name: String): MessageEmbed {
+        val r = rules(meta)
+        val info = r.nation(name) ?: throw PlayerError("**$name** isn't a nation you can pick in this game.")
+        val compute = { val n = r.ruleset.nations[info.name]!!; InfoPlus.tx(n.getLeaderDisplayName()) to InfoPlus.pediaLines(n, r.ruleset).joinToString("\n") }
+        val (title, body) = if (onEngineThread()) compute() else Engine.run(compute)
+        return EmbedBuilder().setColor(java.awt.Color(46, 134, 193)).setTitle("🏳️ ${cut(title, 250)}")
+            .setDescription(cut(body.ifBlank { info.description }, 4000))
+            .setFooter("${meta.name} · ${r.nations.size} nations to pick from").build()
+    }
+
     // ================================================================== caps (used by the core lobby, no engine needed)
 
     /** How many major civilizations (players + AI) this lobby's map can hold. */
     fun maxMajors(meta: GameMeta): Int {
         if (importPath(meta) != null) return meta.settings.extra[K_IMPORT_CIVS]?.toIntOrNull() ?: OTHER_CAP
         if (scenario(meta) != null || customMap(meta) != null) return OTHER_CAP
-        return MAP_SIZE_CAP[meta.settings.mapSize] ?: 12
+        return sizeCap(meta)
     }
+
+    /** The host's custom map size (null unless map size is Custom with dimensions). Pure, any thread. */
+    fun customSize(meta: GameMeta): MapSize? {
+        if (meta.settings.mapSize != CUSTOM_SIZE) return null
+        val p = pairs(meta.settings.extra[K_CUSTOM_SIZE])
+        p["r"]?.toIntOrNull()?.let { return MapSize(it) }
+        val w = p["w"]?.toIntOrNull() ?: return null
+        val h = p["h"]?.toIntOrNull() ?: return null
+        return MapSize(w, h)
+    }
+    private fun sizeCap(meta: GameMeta): Int =
+        customSize(meta)?.let { MAP_SIZE_CAP[it.getPredefinedOrNextSmaller().name] } ?: MAP_SIZE_CAP[meta.settings.mapSize] ?: 12
+    private fun byRadius(meta: GameMeta) = pairs(meta.settings.extra[K_CUSTOM_SIZE]).containsKey("r")
+    private fun isRectShape(meta: GameMeta) = (meta.settings.extra[K_SHAPE] ?: MapShape.hexagonal) == MapShape.rectangular
+    /** Tile count of the custom size for the lobby's shape */
+    private fun tilesOf(meta: GameMeta, size: MapSize) =
+        if (isRectShape(meta)) size.width * size.height else com.unciv.logic.map.HexMath.getNumberOfTilesInHexagon(size.radius)
+    private fun sizeText(meta: GameMeta, size: MapSize) = if (byRadius(meta)) "radius ${size.radius}" else "${size.width}×${size.height}"
 
     /** Highest value for the lobby's AI dropdown (a select holds 25 options: 0..24). */
     fun maxAiChoice(meta: GameMeta): Int = (maxMajors(meta) - meta.seats.size).coerceIn(1, 24)
@@ -205,6 +374,9 @@ object SetupPlus : Extension {
         var type = st.mapType
         var ai = st.aiCivs
         val notes = ArrayList<String>()
+        var radius: Int? = null
+        var width: Int? = null
+        var height: Int? = null
         val rs = rulesetE(meta)
         val majors = GameOps.majorNations(meta)
         fun put(k: String, v: String?) { if (v == null) ex.remove(k) else ex[k] = v }
@@ -226,21 +398,31 @@ object SetupPlus : Extension {
                 continue
             }
             when (name) {
-                "map_size" -> size = MAP_SIZE_CAP.keys.firstOrNull { it.equals(v, true) } ?: throw PlayerError("Map sizes: ${MAP_SIZE_CAP.keys.joinToString()}.")
+                "map_size" -> size = (MAP_SIZE_CAP.keys + CUSTOM_SIZE).firstOrNull { it.equals(v, true) }
+                    ?: throw PlayerError("Map sizes: ${(MAP_SIZE_CAP.keys + CUSTOM_SIZE).joinToString()}.")
+                "radius" -> radius = v.toIntOrNull() ?: throw PlayerError("`radius` is a whole number of tiles from the centre.")
+                "width" -> width = v.toIntOrNull() ?: throw PlayerError("`width` is a whole number of tiles.")
+                "height" -> height = v.toIntOrNull() ?: throw PlayerError("`height` is a whole number of tiles.")
+                "random_types" -> put(K_RANDOM_TYPES, if (isDefaultWord(v) || v.trim().equals("all", true)) null else list(v).map { n ->
+                    MapType.allValues.firstOrNull { it.equals(n, true) } ?: throw PlayerError("**$n** isn't a map type. Types: ${MapType.allValues.joinToString()}.")
+                }.distinct().joinToString(","))
+                "map_options" -> parseMapOptions(v, ex)
                 "map_type" -> type = (MapType.allValues + RANDOM_TYPE).firstOrNull { it.equals(v, true) }
                     ?: throw PlayerError("Map types: ${(MapType.allValues + RANDOM_TYPE).joinToString()}.")
                 "shape" -> put(K_SHAPE, (MapShape.allValues.firstOrNull { it.equals(v, true) } ?: throw PlayerError("Map shapes: ${MapShape.allValues.joinToString()}."))
                     .takeIf { it != MapShape.hexagonal })
                 "resources" -> put(K_RESOURCES, (RESOURCES.firstOrNull { it.equals(v, true) } ?: throw PlayerError("Resource settings: ${RESOURCES.joinToString()}."))
                     .takeIf { it != MapResourceSetting.default.label })
-                "water" -> {
-                    val f = v.toFloatOrNull()?.takeIf { it in -0.1f..0.1f } ?: throw PlayerError("Water level goes from -0.1 (much less water) to 0.1 (much more).")
-                    put(K_WATER, if (f == 0f) null else fmt(f))
-                }
+                "water" -> put(K_WATER, parseWater(v))
                 "mirroring" -> put(K_MIRROR, (MIRRORING.firstOrNull { it.equals(v, true) } ?: throw PlayerError("Mirroring: ${MIRRORING.joinToString()}."))
                     .takeIf { it != MirroringType.none })
                 "seed" -> put(K_SEED, if (isDefaultWord(v)) null else (v.toLongOrNull()?.toString() ?: throw PlayerError("The seed is a whole number (or `random`).")))
-                "map_sliders" -> put(K_SLIDERS, if (isDefaultWord(v)) null else parseSliders(v, pairs(ex[K_SLIDERS])))
+                "map_sliders" -> if (isDefaultWord(v)) { put(K_SLIDERS, null); put(K_WATER, null) } else {
+                    // water=… is Unciv's "Water level" slider too
+                    val (water, rest) = v.split(Regex("[,;\\s]+")).filter { it.isNotBlank() }.partition { it.substringBefore("=").trim().equals("water", true) }
+                    water.lastOrNull()?.let { put(K_WATER, parseWater(it.substringAfter("=", ""))) }
+                    if (rest.isNotEmpty()) put(K_SLIDERS, parseSliders(rest.joinToString(" "), pairs(ex[K_SLIDERS])))
+                }
                 "max_turns" -> {
                     val n = v.toIntOrNull()?.takeIf { it in 100..1500 } ?: throw PlayerError("Max turns goes from 100 to 1500 (Unciv's range).")
                     put(K_MAX_TURNS, if (n == 500) null else n.toString())
@@ -269,12 +451,50 @@ object SetupPlus : Extension {
                 else -> throw PlayerError("Unknown setup option `$name`.")
             }
         }
+        val dims = radius != null || width != null || height != null
+        if (dims && size != CUSTOM_SIZE) {
+            if (opts.containsKey("map_size")) throw PlayerError("`radius` / `width` / `height` only apply with `map_size:Custom`.")
+            size = CUSTOM_SIZE; notes += "📐 Map size set to **Custom**."
+        }
+        if (size == CUSTOM_SIZE) {
+            if (radius != null && (width != null || height != null))
+                throw PlayerError("Give either `radius:` (hexagonal maps) or `width:` + `height:` (rectangular maps), not both.")
+            if (radius != null) put(K_CUSTOM_SIZE, "r=$radius")
+            else if (width != null || height != null) {
+                val old = pairs(ex[K_CUSTOM_SIZE])
+                val w = width ?: old["w"]?.toIntOrNull() ?: throw PlayerError("Give both `width:` and `height:` for a rectangular custom size.")
+                val h = height ?: old["h"]?.toIntOrNull() ?: throw PlayerError("Give both `width:` and `height:` for a rectangular custom size.")
+                put(K_CUSTOM_SIZE, "w=$w,h=$h")
+            }
+        }
+        if (ex[K_RANDOM_TYPES] != null && type != RANDOM_TYPE) notes += "🎲 `random_types` only matters when the map type is **Random**."
         notes += validateE(copyMeta(meta, ex, size, type, ai), rs)
         // commit only after the whole setup checked out
         st.extra.clear(); st.extra.putAll(ex)
         st.mapSize = size; st.mapType = type; st.aiCivs = ai
         val summary = summaryParts(meta)
         return (listOf("✅ Setup updated.", if (summary.isEmpty()) "All /civ setup options are at Unciv's defaults." else "⚙️ " + summary.joinToString(" · ")) + notes).joinToString("\n")
+    }
+
+    private fun parseWater(v: String): String? {
+        if (isDefaultWord(v)) return null
+        val f = v.trim().toFloatOrNull()?.takeIf { it in -0.1f..0.1f } ?: throw PlayerError("Water level goes from -0.1 (much less water) to 0.1 (much more).")
+        return if (f == 0f) null else fmt(f)
+    }
+
+    /** `map_options: no_ruins=on legendary_start=on …` — the map-generation switches of MapParametersTable */
+    private fun parseMapOptions(v: String, ex: HashMap<String, String>) {
+        val mapFlags = FLAGS.filter { it.map }
+        if (isDefaultWord(v)) { mapFlags.forEach { ex.remove(it.key) }; return }
+        for (p in v.split(Regex("[,;\\s]+")).filter { it.isNotBlank() }) {
+            val kv = p.split("=")
+            val f = mapFlags.firstOrNull { it.option.equals(kv[0].trim(), true) }
+                ?: throw PlayerError("Unknown map option `${kv[0].trim()}`. Map options: ${mapFlags.joinToString { "`${it.option}`" }} (each `=on` or `=off`).")
+            val b = if (kv.size == 1) true else when (kv[1].trim().lowercase()) {
+                "on", "true", "yes", "1" -> true; "off", "false", "no", "0" -> false; else -> throw PlayerError("`${f.option}` takes on or off.")
+            }
+            if (b == f.default) ex.remove(f.key) else ex[f.key] = b.toString()
+        }
     }
 
     private fun parseSliders(v: String, old: Map<String, String>): String? {
@@ -342,8 +562,10 @@ object SetupPlus : Extension {
             notes += "🎲 With `random_civs` the AI count is ignored: the game picks ${randCivs.first}–${randCivs.last} civilizations (named AI nations may be dropped)."
         }
         if (custom == null) {
-            val cap = MAP_SIZE_CAP[st.mapSize] ?: 12
-            if (majors > cap) throw PlayerError("A **${st.mapSize}** map fits at most $cap civilizations, but this setup can have $majors " +
+            checkCustomSize(meta, notes)
+            val cap = sizeCap(meta)
+            val sizeName = customSize(meta)?.let { "custom (${sizeText(meta, it)})" } ?: st.mapSize
+            if (majors > cap) throw PlayerError("A **$sizeName** map fits at most $cap civilizations, but this setup can have $majors " +
                 "($humans players + ${majors - humans} AI). Pick a bigger map size or fewer AI opponents.")
         }
         if (pool.isEmpty() && majors > pickable.size) throw PlayerError("These rules only have ${pickable.size} nations, but the game needs $majors (players + AI).")
@@ -373,6 +595,25 @@ object SetupPlus : Extension {
         if (!statValue(meta, STATS[0]) && STATS.drop(1).any { pairs(ex[K_STATS]).containsKey(it.key) })
             notes += "📊 Civilization stats are off, so the other stats switches have no effect."
         return notes
+    }
+
+    /** Unciv's MapSize.fixUndesiredSizes rules (as NewGameScreen checks them) + its large-map warnings. */
+    private fun checkCustomSize(meta: GameMeta, notes: MutableList<String>) {
+        if (meta.settings.mapSize != CUSTOM_SIZE) return
+        val size = customSize(meta) ?: throw PlayerError("A **Custom** map size needs its dimensions: `/civ setup radius:` for hexagonal maps, " +
+            "or `width:` + `height:` for rectangular ones (Unciv's World Size → Custom).")
+        val wrap = meta.settings.worldWrap
+        size.clone().fixUndesiredSizes(wrap)?.let { msg ->
+            throw PlayerError("$msg (${size.width}×${size.height}, radius ${size.radius}). Unciv needs width and height of at least 3, " +
+                "a radius of 2–500, sides no more than 16:1" + (if (wrap) ", and a width of at least 32 with world wrap" else "") + ".")
+        }
+        if (wrap && size.width % 2 != 0) notes += "🌐 World wrap needs an even width — Unciv will use ${size.width - 1}."
+        val tiles = tilesOf(meta, size)
+        if (tiles > VERY_LARGE_TILES) throw PlayerError("That map would have $tiles tiles. Unciv warns \"This is a very large map - may cause Out Of Memory crashes\" " +
+            "from $VERY_LARGE_TILES tiles, so this bot stops there — pick a smaller size.")
+        if (tiles >= LARGE_TILES) notes += "📐 This is a large map ($tiles tiles) — may cause latency issues (Unciv's warning); turns and map pictures get slower."
+        if (isRectShape(meta) && byRadius(meta)) notes += "📐 Rectangular maps are sized by width × height — radius ${size.radius} becomes ${size.width}×${size.height}."
+        if (!isRectShape(meta) && !byRadius(meta)) notes += "📐 ${meta.settings.extra[K_SHAPE] ?: MapShape.hexagonal} maps are sized by radius — ${size.width}×${size.height} becomes radius ${size.radius}."
     }
 
     /** Engine thread. */
@@ -408,7 +649,10 @@ object SetupPlus : Extension {
 
         if (!custom) {
             if (st.mapSize in MAP_SIZE_CAP) mp.mapSize = MapSize(st.mapSize)
-            mp.type = if (st.mapType == RANDOM_TYPE || st.mapType !in MapType.allValues) MapType.allValues.random() else st.mapType
+            else customSize(meta)?.let { mp.mapSize = it.clone(); mp.mapSize.fixUndesiredSizes(mp.worldWrap) }   // (rounds an odd world-wrap width)
+            // "Random" picks from the host's map type list, like Unciv's "Enabled Map Generation Types" checkboxes
+            val pool = list(ex[K_RANDOM_TYPES]).filter { it in MapType.allValues }.ifEmpty { MapType.allValues }
+            mp.type = if (st.mapType == RANDOM_TYPE || st.mapType !in MapType.allValues) pool.random() else st.mapType
             mp.mapResources = ex[K_RESOURCES] ?: MapResourceSetting.default.label
             mp.waterThreshold = ex[K_WATER]?.toFloatOrNull() ?: 0f
             mp.shape = ex[K_SHAPE] ?: MapShape.hexagonal
@@ -429,6 +673,8 @@ object SetupPlus : Extension {
             val text = if (v) f.onText else f.offText
             if (v != f.default && text.isNotEmpty()) out += text
         }
+        customSize(meta)?.let { out += "📐 custom size ${sizeText(meta, it)} (${tilesOf(meta, it)} tiles)" }
+        if (meta.settings.mapType == RANDOM_TYPE) ex[K_RANDOM_TYPES]?.let { out += "🎲 random map type from ${list(it).joinToString()}" }
         ex[K_MAX_TURNS]?.let { out += "⏳ max $it turns" }
         ex[K_SHAPE]?.let { out += it.lowercase() }
         ex[K_RESOURCES]?.let { out += "${it.lowercase()} resources" }
@@ -451,10 +697,11 @@ object SetupPlus : Extension {
             val warn = if (scenario(meta) != null) listOf("⚠️ A scenario is also selected and takes precedence — `/civ lobby scenario:none`") else emptyList()
             return listOf(l.take(400)) + warn
         }
+        val export = if (ex[K_ALLOW_EXPORT] == "true") listOf("💾 The host may export the save mid-game (`allow_export` on — the file shows the whole map)") else emptyList()
         val parts = summaryParts(meta)
-        if (parts.isEmpty()) return emptyList()
+        if (parts.isEmpty()) return export
         val line = "⚙️ " + parts.joinToString(" · ")
-        return listOf(if (line.length > 400) line.take(397) + "…" else line)
+        return listOf(if (line.length > 400) line.take(397) + "…" else line) + export
     }
 
     /** Every option with its current value (for `/civ setup` with no options). */
@@ -464,10 +711,13 @@ object SetupPlus : Extension {
         val sl = pairs(ex[K_SLIDERS])
         fun on(b: Boolean) = if (b) "on" else "off"
         val lines = ArrayList<String>()
-        lines += "**Map** — map_size `${st.mapSize}` · map_type `${st.mapType}` · shape `${ex[K_SHAPE] ?: MapShape.hexagonal}` · resources `${ex[K_RESOURCES] ?: "Default"}` · " +
-            "water `${ex[K_WATER]?.let { "${WATER[it] ?: it} ($it)" } ?: "Normal (0)"}` · mirroring `${ex[K_MIRROR] ?: MirroringType.none}` · seed `${ex[K_SEED] ?: "random"}`"
-        lines += "**map_sliders** — " + SLIDERS.joinToString(" · ") { "${it.key} `${sl[it.key] ?: fmt(it.default)}`" }
-        lines += "**Rules** — " + FLAGS.joinToString(" · ") { "${it.option} `${on(flagValue(ex, it))}`" }
+        val cs = customSize(meta)
+        lines += "**Map** — map_size `${st.mapSize}`" + (cs?.let { " (${sizeText(meta, it)}: ${it.width}×${it.height}, radius ${it.radius})" } ?: "") +
+            " · map_type `${st.mapType}` · random_types `${ex[K_RANDOM_TYPES]?.let { list(it).joinToString() } ?: "all"}` · shape `${ex[K_SHAPE] ?: MapShape.hexagonal}` · " +
+            "resources `${ex[K_RESOURCES] ?: "Default"}` · mirroring `${ex[K_MIRROR] ?: MirroringType.none}` · seed `${ex[K_SEED] ?: "random"}`"
+        lines += "**map_sliders** — water `${ex[K_WATER]?.let { "${WATER[it] ?: it} ($it)" } ?: "Normal (0)"}` · " + SLIDERS.joinToString(" · ") { "${it.key} `${sl[it.key] ?: fmt(it.default)}`" }
+        lines += "**map_options** — " + FLAGS.filter { it.map }.joinToString(" · ") { "${it.option} `${on(flagValue(ex, it))}`" }
+        lines += "**Rules** — " + FLAGS.filter { !it.map }.joinToString(" · ") { "${it.option} `${on(flagValue(ex, it))}`" }
         lines += "**Turns** — max_turns `${ex[K_MAX_TURNS] ?: "500"}` (Time victory)"
         lines += "**Civilizations** — ai `${st.aiCivs}` (the map allows up to ${maxMajors(meta)} civs) · ai_nations `${ex[K_AI_NATIONS]?.let { list(it).joinToString() } ?: "random"}` · " +
             "random_civs `${ex[K_RAND_CIVS] ?: "off"}` · random_city_states `${ex[K_RAND_CS] ?: "off"}` · nations_pool `${ex[K_POOL]?.let { list(it).joinToString() } ?: "off"}`"
@@ -496,6 +746,236 @@ object SetupPlus : Extension {
             "**Rules:** ${rules.joinToString(" + ")} — " +
             (if (game.gameParameters.mods.isEmpty()) "no extra mods needed." else "install the same mods in Unciv first.") +
             "\nTo bring a game back here, a host opens a lobby and uses `/civ save import file:`."
+    }
+
+    // ================================================================== saves: who may export
+
+    /**
+     * Null if [userId] may export the game of [meta] now, else the reason. A save holds the whole map without fog of war,
+     * so in a running game with other humans only the host may export, and only when the lobby turned `allow_export` on
+     * (everyone saw that before joining). A lone human against the AI may always export; anyone may once the game ended.
+     */
+    fun exportBlocker(meta: GameMeta, userId: String, ended: Boolean): String? {
+        if (meta.seatOf(userId) == null) return "You're not playing in **${meta.name}**."
+        if (ended || meta.status == Status.ENDED) return null
+        if (meta.seats.count { !it.aiControlled } <= 1) return null
+        if (meta.settings.extra[K_ALLOW_EXPORT] == "true") {
+            if (userId == meta.hostId) return null
+            return "Only the host (<@${meta.hostId}>) may export **${meta.name}** while it's running (the save shows the whole map, fog of war included)."
+        }
+        return "A save file shows the whole map without fog of war, so **${meta.name}** can only be exported once the game has ended. " +
+            "(A host who wants mid-game exports turns on `/civ lobby allow_export:True` before the game starts, so every player knows.)"
+    }
+
+    /** NOT on the engine thread. */
+    fun setAllowExport(meta: GameMeta, on: Boolean) {
+        if (on) meta.settings.extra[K_ALLOW_EXPORT] = "true" else meta.settings.extra.remove(K_ALLOW_EXPORT)
+    }
+
+    // ================================================================== turn history + rollback
+
+    /** Engine thread. Keeps a start-of-turn snapshot (once per turn, like Unciv's autosave). */
+    private fun snapshotE(s: Session) {
+        val store = Store.current ?: return
+        val g = s.game ?: return
+        if (s.meta.status != Status.RUNNING || s.meta.id.isEmpty()) return
+        val turn = g.turns + 1
+        if (store.historyGameId(s.meta.id) == g.gameId && store.historyFile(s.meta.id, turn).isFile) return
+        runCatching { store.saveHistory(s.meta.id, g.gameId, turn, Engine.serialize(g), HISTORY_KEEP) }
+            .onFailure { log.warn("turn snapshot failed for {}: {}", s.meta.id, it.toString()) }
+    }
+
+    override fun onTurnEnded(s: Session) = snapshotE(s)
+    override fun beforeMutation(s: Session, seat: Seat, verb: String) = snapshotE(s)
+
+    /** Turns that can be rolled back to (oldest first). */
+    fun rollbackTurns(s: Session, store: Store): List<Int> {
+        val g = s.game ?: return emptyList()
+        if (store.historyGameId(s.meta.id) != g.gameId) return emptyList()
+        return store.historyTurns(s.meta.id).filter { it <= g.turns + 1 }
+    }
+
+    /** A proposed rollback, checked again right before it's applied. */
+    class RollbackPlan(val gid: String, val toTurn: Int, val fromTurns: Int, val fromCiv: String, val summary: String)
+
+    /** Engine thread. What going back to the start of [turn] would undo. */
+    fun rollbackPlanE(s: Session, store: Store, turn: Int): RollbackPlan {
+        val g = s.game ?: throw PlayerError("This game hasn't started yet.")
+        if (s.meta.status != Status.RUNNING) throw PlayerError("**${s.meta.name}** isn't running.")
+        val now = g.turns + 1
+        val turns = rollbackTurns(s, store)
+        if (turns.isEmpty()) throw PlayerError("There are no saved turns for **${s.meta.name}** yet (one is kept at the start of every turn).")
+        if (turn > now) throw PlayerError("**${s.meta.name}** is on turn $now — you can only go back.")
+        if (turn !in turns) throw PlayerError("There's no snapshot of turn $turn. Turns you can go back to: ${turns.joinToString()} (the last $HISTORY_KEEP are kept).")
+        val old = Engine.deserialize(store.historyFile(s.meta.id, turn).readText())
+        val lines = ArrayList<String>()
+        lines += if (turn == now) "⏪ Back to the **start of turn $turn** — everything done since this turn began is undone."
+            else "⏪ Back from turn **$now** to the **start of turn $turn** — ${now - turn} turn(s) of play by everyone (and the AI) are undone."
+        for (seat in s.meta.seats) {
+            val c = runCatching { g.getCivilization(seat.civId) }.getOrNull() ?: continue
+            val o = runCatching { old.getCivilization(seat.civId) }.getOrNull() ?: continue
+            lines += "• **${c.civName}** (<@${seat.userId}>): ${o.cities.size}→${c.cities.size} cities · ${o.units.getCivUnitsSize()}→${c.units.getCivUnitsSize()} units · " +
+                "${o.tech.techsResearched.size}→${c.tech.techsResearched.size} techs · ${o.gold}→${c.gold} gold (then→now)"
+        }
+        lines += "Announcements already posted stay in the channel; players who left stay with the AI."
+        return RollbackPlan(s.meta.id, turn, g.turns, g.currentPlayer, cut(lines.joinToString("\n"), 1500))
+    }
+
+    /** Engine thread. Restores the snapshot of [plan] (refused if the game moved on since). Returns the announcement. */
+    fun rollbackE(s: Session, store: Store, plan: RollbackPlan, ctl: Controller? = null): String {
+        val g = s.game ?: throw PlayerError("This game hasn't started yet.")
+        if (s.meta.status != Status.RUNNING) throw PlayerError("**${s.meta.name}** isn't running any more.")
+        if (g.turns != plan.fromTurns || g.currentPlayer != plan.fromCiv)
+            throw PlayerError("The game moved on since the rollback was proposed — start it again with `/civ rollback`.")
+        val file = store.historyFile(s.meta.id, plan.toTurn)
+        if (!file.isFile || store.historyGameId(s.meta.id) != g.gameId) throw PlayerError("The snapshot of turn ${plan.toTurn} is gone.")
+        val ng = Engine.deserialize(file.readText())
+        // players who left since then stay with the AI
+        for (seat in s.meta.seats) if (seat.aiControlled) runCatching { ng.getCivilization(seat.civId).playerType = PlayerType.AI }
+        s.game = ng
+        UncivGame.Current.gameInfo = ng
+        try {
+            // a snapshot taken at an AI-run seat's turn: let it play, as Controller.endTurn does
+            var guard = 0
+            while (guard++ < 50) {
+                val seat = s.meta.seatOfCiv(ng.currentPlayerCiv.civID)
+                if (seat == null || !seat.aiControlled) break
+                GameOps.endTurn(ng, ng.currentPlayerCiv)
+            }
+        } catch (e: Exception) {
+            s.game = g; UncivGame.Current.gameInfo = g
+            throw e
+        }
+        CityPlus.onTurnEnded(s)   // its undo steps belong to the timeline we just left
+        ctl?.proposals?.values?.removeIf { it.gid == s.meta.id }
+        store.historyTurns(s.meta.id).filter { it > plan.toTurn }.forEach { store.historyFile(s.meta.id, it).delete() }
+        val msg = "⏪ **${s.meta.name}** was rolled back to the start of turn ${plan.toTurn}."
+        s.meta.addEvent(msg)
+        s.meta.turnStartedAt = System.currentTimeMillis()
+        s.meta.lastReminderAt = 0
+        store.saveGame(s)
+        return msg
+    }
+
+    /** Every human player (not AI-run seats) must accept. The host's confirmation counts as their accept. */
+    class RollbackVote(val token: String, val plan: RollbackPlan, val hostId: String, val needed: Set<String>, val created: Long = System.currentTimeMillis()) {
+        val accepted = LinkedHashSet<String>().apply { add(hostId) }
+        @Volatile var done = false
+        val complete get() = accepted.containsAll(needed)
+        fun expired(now: Long = System.currentTimeMillis()) = now - created > VOTE_MS
+        /** @return true when this accept completed the vote */
+        fun accept(uid: String): Boolean {
+            if (uid !in needed) throw PlayerError("Only players in this game vote on a rollback.")
+            accepted += uid
+            return complete
+        }
+        fun text(name: String) = "🗳️ <@$hostId> wants to roll **$name** back to the start of turn ${plan.toTurn}. **Every player must accept** " +
+            "(${accepted.count { it in needed }}/${needed.size})" + needed.filter { it !in accepted }.let { w -> if (w.isEmpty()) "" else " — waiting for ${w.joinToString(" ") { "<@$it>" }}" } +
+            "\n" + plan.summary
+    }
+
+    private const val VOTE_MS = 24L * 3600 * 1000
+    private val pendingRollbacks = java.util.concurrent.ConcurrentHashMap<String, RollbackVote>()
+    private fun token() = java.lang.Long.toString(System.nanoTime() % 2176782336L, 36)
+    /** Our own buttons ("su|…"), handled by [ensureListener] — Bot.kt only routes "c|…" ids. */
+    private fun suId(vararg parts: String) = (listOf("su") + parts).joinToString("|").take(100)
+    fun voteRows(v: RollbackVote) = listOf(ActionRow.of(
+        Button.success(suId("rbv", v.token, "y"), "Accept rollback").withEmoji(Emoji.fromUnicode("✅")),
+        Button.danger(suId("rbv", v.token, "n"), "Reject"),
+    ))
+
+    private fun rollbackCommand(event: SlashCommandInteractionEvent, bot: BotApi) {
+        val s = bot.gameHere(event.channel.id, event.user.id)?.takeIf { it.meta.status == Status.RUNNING && it.game != null }
+            ?: return event.reply("There's no running game of yours here. Run this in the game's channel or thread.").setEphemeral(true).queue()
+        val turn = event.getOption("turn")?.asInt
+        if (turn == null) {
+            val turns = rollbackTurns(s, bot.store)
+            return event.reply(if (turns.isEmpty()) "No turns of **${s.meta.name}** are saved yet — one is kept at the start of every turn."
+                else "⏪ **${s.meta.name}** can go back to the start of turn ${turns.joinToString()} (the last $HISTORY_KEEP turns are kept). " +
+                    "The host runs `/civ rollback turn:<n>`; with 2+ players everyone must accept.").setEphemeral(true).queue()
+        }
+        if (s.meta.hostId != event.user.id) return event.reply("Only the host (<@${s.meta.hostId}>) can roll the game back.").setEphemeral(true).queue()
+        event.deferReply(true).queue { hook ->
+            bot.async {
+                try {
+                    val plan = Engine.withGame(s.game!!) { rollbackPlanE(s, bot.store, turn) }
+                    val humans = s.meta.seats.filter { !it.aiControlled }.map { it.userId }.toSet()
+                    val v = RollbackVote(token(), plan, s.meta.hostId, humans + s.meta.hostId)
+                    pendingRollbacks[v.token] = v
+                    val how = if (v.needed.size > 1) "Confirming posts a vote: **every player** (${v.needed.size}) must accept before anything changes."
+                        else "You're the only human player, so it happens right away."
+                    hook.editOriginal(MessageEditBuilder().setContent(cut("${plan.summary}\n\n$how", 1950)).setComponents(ActionRow.of(
+                        Button.danger(suId("rbc", v.token, "y"), "Roll back to turn $turn").withEmoji(Emoji.fromUnicode("⏪")),
+                        Button.secondary(suId("rbc", v.token, "n"), "Cancel"))).build()).queue()
+                } catch (e: PlayerError) { hook.editOriginal("❌ ${e.message}").queue() } catch (e: Exception) {
+                    log.error("rollback preview failed", e); hook.editOriginal("💥 Couldn't prepare the rollback: ${e.message}").queue()
+                }
+            }
+        }
+    }
+
+    // ---- our buttons (registered once a SetupPlus command ran; votes live in memory and expire on restart)
+    private val listenerAdded = java.util.concurrent.atomic.AtomicBoolean(false)
+    @Volatile private var botApi: BotApi? = null
+
+    private fun ensureListener(jda: JDA, bot: BotApi) {
+        botApi = bot
+        if (!listenerAdded.compareAndSet(false, true)) return
+        jda.addEventListener(object : ListenerAdapter() {
+            override fun onButtonInteraction(event: ButtonInteractionEvent) {
+                if (!event.componentId.startsWith("su|")) return
+                runCatching { onButton(event) }.onFailure { log.warn("SetupPlus button failed", it) }
+            }
+        })
+    }
+
+    private fun onButton(event: ButtonInteractionEvent) {
+        val bot = botApi ?: return
+        val parts = event.componentId.split("|")
+        val v = pendingRollbacks[parts.getOrNull(2) ?: ""]
+        if (v == null || v.expired() || v.done) {
+            pendingRollbacks.remove(parts.getOrNull(2) ?: "")
+            return event.editMessage("This rollback request has expired.").setComponents().queue()
+        }
+        val s = bot.store.sessions[v.plan.gid] ?: return event.editMessage("That game no longer exists.").setComponents().queue()
+        val uid = event.user.id
+        when (parts.getOrNull(1) to parts.getOrNull(3)) {
+            "rbc" to "n" -> { pendingRollbacks.remove(v.token); event.editMessage("Rollback cancelled.").setComponents().queue() }
+            "rbc" to "y" -> {
+                if (uid != v.hostId) return event.reply("Only the host can confirm.").setEphemeral(true).queue()
+                if (v.complete) { event.deferEdit().queue(); runRollback(event.hook, v, s, bot, edit = true); return }
+                event.editMessage("🗳️ Vote posted in the game channel — the rollback happens once every player accepts.").setComponents().queue()
+                event.jda.getChannelById(MessageChannel::class.java, s.meta.playChannelId)
+                    ?.sendMessage(MessageCreateBuilder().setContent(cut(v.text(s.meta.name), 1950)).setComponents(voteRows(v)).build())?.queue()
+            }
+            "rbv" to "n" -> {
+                if (uid !in v.needed) return event.reply("Only players in this game vote on a rollback.").setEphemeral(true).queue()
+                pendingRollbacks.remove(v.token)
+                event.editMessage("❌ <@$uid> rejected rolling **${s.meta.name}** back to turn ${v.plan.toTurn}. Nothing changed.").setComponents().queue()
+            }
+            "rbv" to "y" -> {
+                val complete = try { synchronized(v) { v.accept(uid) } } catch (e: PlayerError) { return event.reply("❌ ${e.message}").setEphemeral(true).queue() }
+                if (!complete) return event.editMessage(cut(v.text(s.meta.name), 1950)).setComponents(voteRows(v)).queue()
+                event.deferEdit().queue()
+                runRollback(event.hook, v, s, bot, edit = true)
+            }
+        }
+    }
+
+    private fun runRollback(hook: InteractionHook, v: RollbackVote, s: Session, bot: BotApi, edit: Boolean) = bot.async {
+        synchronized(v) { if (v.done) return@async; v.done = true }
+        pendingRollbacks.remove(v.token)
+        try {
+            val (msg, next) = Engine.withGame(s.game!!) {
+                val m = rollbackE(s, bot.store, v.plan, bot.ctl)
+                val g = s.game!!
+                m to TurnResult(listOf(m), s.meta.seatOfCiv(g.currentPlayerCiv.civID), g.currentPlayerCiv.civName, g.turns + 1, false, null)
+            }
+            if (edit) hook.editOriginal("✅ $msg").setComponents().queue()
+            (bot as? Bot)?.announce(s, next)
+        } catch (e: PlayerError) { hook.editOriginal("❌ ${e.message}").setComponents().queue() } catch (e: Exception) {
+            log.error("rollback failed", e); hook.editOriginal("💥 The rollback failed: ${e.message}. The game is unchanged.").setComponents().queue()
+        }
     }
 
     // ================================================================== saves: import
@@ -625,16 +1105,21 @@ object SetupPlus : Extension {
 
     override fun commands(): List<SubcommandData> = listOf(
         SubcommandData("setup", "Host: every other Unciv game option (no options = show current values)").addOptions(
-            OptionData(OptionType.STRING, "map_size", "Map size (Huge included)").also { o -> MAP_SIZE_CAP.forEach { (k, n) -> o.addChoice("$k (up to $n civs)", k) } },
+            OptionData(OptionType.STRING, "map_size", "Map size (Huge included; Custom = set radius: or width:+height:)").also { o ->
+                MAP_SIZE_CAP.forEach { (k, n) -> o.addChoice("$k (up to $n civs)", k) }; o.addChoice("Custom (radius: or width: + height:)", CUSTOM_SIZE) },
             OptionData(OptionType.STRING, "map_type", "Map generator").also { o -> (MapType.allValues + RANDOM_TYPE).forEach { o.addChoice(it, it) } },
+            OptionData(OptionType.STRING, "random_types", "Map types 'Random' may pick, e.g. Pangaea,Archipelago (or 'all')"),
+            OptionData(OptionType.INTEGER, "radius", "Custom size, hexagonal maps: tiles from the centre (2-500)").setRequiredRange(1, 1000),
+            OptionData(OptionType.INTEGER, "width", "Custom size, rectangular maps: width in tiles").setRequiredRange(1, 2000),
+            OptionData(OptionType.INTEGER, "height", "Custom size, rectangular maps: height in tiles").setRequiredRange(1, 2000),
             OptionData(OptionType.STRING, "shape", "Map shape").also { o -> MapShape.allValues.forEach { o.addChoice(it, it) } },
             OptionData(OptionType.STRING, "resources", "Resource abundance").also { o -> RESOURCES.forEach { o.addChoice(it, it) } },
-            OptionData(OptionType.STRING, "water", "Sea level (Unciv's water level)").also { o -> WATER.forEach { (v, l) -> o.addChoice("$l ($v)", v) } },
             OptionData(OptionType.STRING, "mirroring", "Mirror the map so every side is the same").also { o ->
                 MIRRORING.forEach { o.addChoice(if (it == MirroringType.none || it == MirroringType.leftright) it else "$it (experimental)", it) } },
             OptionData(OptionType.STRING, "seed", "Map seed: a number to get the same map again, or 'random'"),
-            OptionData(OptionType.STRING, "map_sliders", "e.g. elevation=0.75 temperature=0.5 vegetation=0.6 coast=4 biome=8 (or reset)"),
-        ).addOptions(FLAGS.map { OptionData(OptionType.BOOLEAN, it.option, it.desc.take(100)) }).addOptions(
+            OptionData(OptionType.STRING, "map_sliders", "e.g. water=0.05 elevation=0.75 temperature=0.5 vegetation=0.6 coast=4 biome=8 (or reset)"),
+            OptionData(OptionType.STRING, "map_options", "e.g. no_ruins=on no_wonders=on strategic_balance=on legendary_start=on (or default)"),
+        ).addOptions(FLAGS.filter { !it.map }.map { OptionData(OptionType.BOOLEAN, it.option, it.desc.take(100)) }).addOptions(
             OptionData(OptionType.INTEGER, "max_turns", "Turn limit for Time victory (100–1500, default 500)").setRequiredRange(100, 1500),
             OptionData(OptionType.INTEGER, "ai", "Number of AI opponents (more than the lobby dropdown offers)").setRequiredRange(0, OTHER_CAP.toLong()),
             OptionData(OptionType.STRING, "ai_nations", "Specific AI nations, e.g. Rome,Greece (or 'random')"),
@@ -643,11 +1128,14 @@ object SetupPlus : Extension {
             OptionData(OptionType.STRING, "nations_pool", "Random nations come only from these, e.g. Rome,Greece,Egypt (or 'off')"),
             OptionData(OptionType.STRING, "stats", "e.g. demographics=on rankings=off charts=off own_only=on extra_types=on (or off/default)"),
         ),
+        SubcommandData("rollback", "Host: go back to the start of an earlier turn (every player must accept)").addOptions(
+            OptionData(OptionType.INTEGER, "turn", "Turn to go back to (leave out to list the saved turns)").setMinValue(1),
+        ),
     )
 
     override fun commandGroups(): List<SubcommandGroupData> = listOf(
         SubcommandGroupData("save", "Unciv save files: export this game, or start a lobby from one").addSubcommands(
-            SubcommandData("export", "Download this game as an Unciv save (opens in desktop Unciv as hotseat)"),
+            SubcommandData("export", "Download this game as an Unciv save (after it ended, or host with allow_export)"),
             SubcommandData("import", "Host / Manage Server: start this lobby's game from an Unciv save").addOptions(
                 OptionData(OptionType.ATTACHMENT, "file", "The Unciv save file (max 20 MB)"),
                 OptionData(OptionType.BOOLEAN, "remove", "Drop the imported save from this lobby"),
@@ -658,10 +1146,12 @@ object SetupPlus : Extension {
     override fun onCommand(event: SlashCommandInteractionEvent, bot: BotApi): Boolean {
         when {
             event.subcommandGroup == null && event.subcommandName == "setup" -> setupCommand(event, bot)
+            event.subcommandGroup == null && event.subcommandName == "rollback" -> rollbackCommand(event, bot)
             event.subcommandGroup == "save" && event.subcommandName == "export" -> exportCommand(event, bot)
             event.subcommandGroup == "save" && event.subcommandName == "import" -> importCommand(event, bot)
             else -> return false
         }
+        ensureListener(event.jda, bot)
         return true
     }
 
@@ -687,9 +1177,30 @@ object SetupPlus : Extension {
     }
 
     private fun exportCommand(event: SlashCommandInteractionEvent, bot: BotApi) {
-        val s = bot.gameHere(event.channel.id, event.user.id)?.takeIf { it.meta.seatOf(event.user.id) != null }
-            ?: return event.reply("You're not playing in a game here. Run this in the game's channel or thread.").setEphemeral(true).queue()
+        val uid = event.user.id
+        val ch = event.channel.id
+        val s = bot.gameHere(ch, uid)?.takeIf { it.meta.seatOf(uid) != null }
+        if (s == null) {
+            // a finished game played here (moved to data/finished/)
+            val fin = bot.store.finishedMetas().filter { (it.channelId == ch || it.threadId == ch) && it.seatOf(uid) != null }.maxByOrNull { it.turnStartedAt }
+                ?: return event.reply("You're not playing in a game here. Run this in the game's channel or thread.").setEphemeral(true).queue()
+            val file = bot.store.finishedSave(fin.id).takeIf { it.isFile }
+                ?: return event.reply("The save of **${fin.name}** is gone.").setEphemeral(true).queue()
+            if (file.length() > MAX_EXPORT_BYTES) return event.reply("❌ The save is ${file.length() / 1048576} MB — too big for a Discord upload.").setEphemeral(true).queue()
+            event.deferReply(true).queue { hook ->
+                bot.async {
+                    try {
+                        val text = file.readText()
+                        val note = Engine.run { exportNote(Engine.deserialize(text)) }
+                        val name = fin.name.replace(Regex("[^A-Za-z0-9 _()-]"), "").trim().take(50).ifEmpty { "CivBot game" } + " - final.civ"
+                        hook.editOriginal(MessageEditBuilder().setContent("🏁 **${fin.name}** has ended.\n$note").setAttachments(FileUpload.fromData(text.toByteArray(), name)).build()).queue()
+                    } catch (e: Exception) { log.error("export failed", e); hook.editOriginal("💥 Couldn't export the game: ${e.message}").queue() }
+                }
+            }
+            return
+        }
         val game = s.game ?: return event.reply("**${s.meta.name}** hasn't started yet — there's nothing to export.").setEphemeral(true).queue()
+        exportBlocker(s.meta, uid, ended = false)?.let { return event.reply("🔒 $it").setEphemeral(true).queue() }
         event.deferReply(true).queue { hook ->
             bot.async {
                 try {
@@ -774,6 +1285,8 @@ object SetupPlus : Extension {
                     .addSubcommands(Extensions.all.flatMap { it.commands() }).addSubcommandGroups(Extensions.all.flatMap { it.commandGroups() })
                 val setup = cmd.subcommands.first { it.name == "setup" }
                 check(setup.options.size == 25 && cmd.subcommandGroups.any { g -> g.name == "save" && g.subcommands.map { it.name } == listOf("export", "import") })
+                check(setup.options.map { it.name }.containsAll(listOf("radius", "width", "height", "random_types", "map_options")) && cmd.subcommands.any { it.name == "rollback" })
+                check(cmd.subcommands.all { sc -> sc.options.size <= 25 && sc.options.all { it.description.length <= 100 && it.choices.size <= 25 } })
                 println("  [SetupPlus] /civ has ${cmd.subcommands.size} extension subcommands + ${cmd.subcommandGroups.size} group(s); /civ setup has ${setup.options.size} options")
             }
             val a = lobby("su1")
@@ -916,6 +1429,165 @@ object SetupPlus : Extension {
                 check(l.settings.extra[K_IMPORT] == null && !File(dataDir, "imports/su9.civ").exists())
                 importSave(l, text.toByteArray(), "x.civ", dataDir); check(File(dataDir, "imports/su9.civ").exists())
                 clearImport(l); check(!File(dataDir, "imports/su9.civ").exists() && lobbyLines(l).isEmpty())
+            }
+
+            // ---- 7. lobby lists from the ruleset, nation picker, city-states beyond 12
+            step("lobby: difficulties, speeds, eras, victories and city-state maximum from the ruleset") {
+                val r = rules(lobby("su10"))
+                check(r.difficulties.containsAll(GameOps.DIFFICULTIES) && r.speeds.containsAll(GameOps.SPEEDS) && r.eras.containsAll(GameOps.ERAS)) { "${r.difficulties} ${r.speeds} ${r.eras}" }
+                check(r.victories.containsAll(GameOps.VICTORIES) && r.maxCityStates > 12) { "${r.victories} cs=${r.maxCityStates}" }
+                println("  [SetupPlus] G&K lists: ${r.difficulties.size} difficulties, ${r.speeds.size} speeds, ${r.eras.size} eras, ${r.victories.size} victories, " +
+                    "${r.maxCityStates} city-states, ${r.nations.size} nations")
+            }
+            step("lobby: nation picker shows leader + unique ability, hides taken nations") {
+                val l = lobby("su10")
+                val rows = nationPickerRows(l, "902")
+                val opts = rows.flatMap { row -> row.components.filterIsInstance<StringSelectMenu>().flatMap { it.options } }
+                val bab = opts.firstOrNull { it.value == "Babylon" }
+                check(opts.none { it.value == "Greece" } && opts.any { it.value == Constants.random }) { "Greece offered to Ben" }
+                check(bab != null && bab.description!!.contains("Nebuchadnezzar") && bab.description!!.contains("Ingenuity")) { bab?.description.toString() }
+                check(opts.all { (it.description?.length ?: 0) <= 100 && it.label.length <= 100 } && rows.size <= 5 && rows.all { it.components.size <= 25 })
+                check(rows.last().components.single() is Button)
+                println("  [SetupPlus] picker: ${opts.size} options in ${rows.size - 1} selects; Babylon = ${bab.description}")
+            }
+            step("lobby: Nation details… view (Unciv's NationTable text)") {
+                val e = nationDetails(lobby("su10"), "Babylon")
+                check(e.title!!.contains("Nebuchadnezzar") && e.description!!.contains("Ingenuity") && e.description!!.length <= 4096) { e.description.toString() }
+                println("  [SetupPlus] details: ${e.title} — ${e.description!!.replace("\n", " | ").take(200)}")
+            }
+            expectError("lobby: details of a nation that can't be picked refused", "you can pick") { nationDetails(lobby("su10"), "Atlantis") }
+            step("lobby: more than 12 city-states (paged dropdown + started game)") {
+                val l = lobby("su11", size = "Small", ai = 1, cs = 4)
+                val max = maxCityStates(l)
+                val pages = (0..10).map { cityStateOptions(l, it) }
+                check(pages.all { it.size <= 25 } && pages[0].any { it.value == "pg:1" })
+                val values = pages.flatten().map { it.value }.filter { !it.startsWith("pg:") }.distinct()
+                check(values.size == max + 1 && values.contains(max.toString())) { "values $values (max $max)" }
+                l.settings.cityStates = 16
+                check(cityStateOptions(l).any { it.default && it.value == "16" })
+                val g = t.eng { GameOps.startGame(l) }
+                val cs = g.civilizations.count { it.isCityState }
+                check(cs > 12) { "$cs city-states" }
+                println("  [SetupPlus] city-states: dropdown 0–$max over ${values.size} values; Small map game has $cs")
+            }
+            // ---- 8. custom map size + Random map type pool + merged map options
+            step("setup: custom map size by radius (hexagonal)") {
+                val l = lobby("su12")
+                println("  [SetupPlus] " + updateSetup(l, mapOf("map_size" to "Custom", "radius" to "12")).replace("\n", " | "))
+                check(l.settings.mapSize == CUSTOM_SIZE && lobbyLines(l).single().contains("radius 12"))
+                val g = t.eng { GameOps.startGame(l) }
+                val ms = g.tileMap.mapParameters.mapSize
+                check(ms.name == MapSize.custom && ms.radius == 12 && g.tileMap.values.size == com.unciv.logic.map.HexMath.getNumberOfTilesInHexagon(12)) { "$ms ${g.tileMap.values.size}" }
+            }
+            step("setup: custom map size by width × height (rectangular)") {
+                val l = lobby("su13")
+                println("  [SetupPlus] " + updateSetup(l, linkedMapOf("shape" to "Rectangular", "width" to "30", "height" to "18")).replace("\n", " | "))
+                check(l.settings.mapSize == CUSTOM_SIZE)
+                val g = t.eng { GameOps.startGame(l) }
+                val ms = g.tileMap.mapParameters.mapSize
+                check(ms.width == 30 && ms.height == 18 && g.tileMap.mapParameters.shape == MapShape.rectangular) { "$ms" }
+                println("  [SetupPlus] rectangular custom map: $ms, ${g.tileMap.values.size} tiles")
+            }
+            expectError("setup: custom size too small rejected (Unciv's rule)", "too small") { updateSetup(lobby("su14"), mapOf("map_size" to "Custom", "radius" to "1")) }
+            expectError("setup: custom size aspect ratio rejected", "aspect ratio") { updateSetup(lobby("su14"), linkedMapOf("shape" to "Rectangular", "width" to "100", "height" to "4")) }
+            expectError("setup: world wrap needs 32 tiles width", "World wrap") {
+                updateSetup(lobby("su14").apply { settings.worldWrap = true }, linkedMapOf("shape" to "Rectangular", "width" to "20", "height" to "16"))
+            }
+            expectError("setup: custom size too big rejected", "very large") { updateSetup(lobby("su14"), mapOf("map_size" to "Custom", "radius" to "120")) }
+            expectError("setup: Custom without dimensions rejected", "dimensions") { updateSetup(lobby("su14"), mapOf("map_size" to "Custom")) }
+            expectError("setup: radius and width together rejected", "not both") { updateSetup(lobby("su14"), mapOf("radius" to "10", "width" to "20")) }
+            step("setup: large custom map warns like Unciv") {
+                val txt = updateSetup(lobby("su14", ai = 1), mapOf("map_size" to "Custom", "radius" to "40"))
+                check(txt.contains("large map")) { txt }
+            }
+            step("setup: Random map type picks only from random_types") {
+                val l = lobby("su15")
+                updateSetup(l, linkedMapOf("map_type" to "Random", "random_types" to "pangaea, archipelago"))
+                check(l.settings.extra[K_RANDOM_TYPES] == "Pangaea,Archipelago" && lobbyLines(l).single().contains("Pangaea"))
+                val seen = HashSet<String>()
+                repeat(30) {
+                    val setup = GameSetupInfo()
+                    setup.gameParameters.players = ArrayList(l.seats.map { Player(it.nation, PlayerType.Human, "discord:${it.userId}") } + List(2) { Player() })
+                    t.eng { applyToSetup(setup, l) }
+                    seen += setup.mapParameters.type
+                }
+                check(seen == setOf(MapType.pangaea, MapType.archipelago)) { "picked $seen" }
+                updateSetup(l, mapOf("random_types" to "all")); check(l.settings.extra[K_RANDOM_TYPES] == null)
+            }
+            expectError("setup: unknown random map type rejected", "isn't a map type") { updateSetup(lobby("su15"), mapOf("random_types" to "Atlantis")) }
+            step("setup: map_options + water in map_sliders (merged options)") {
+                val l = lobby("su16")
+                updateSetup(l, mapOf("map_options" to "no_ruins=on legendary_start", "map_sliders" to "water=0.05 elevation=0.75"))
+                val ex = l.settings.extra
+                check(ex["su_noRuins"] == "true" && ex["su_legendary"] == "true" && ex[K_WATER] == "0.05" && ex[K_SLIDERS] == "elevation=0.75") { ex.toString() }
+                updateSetup(l, mapOf("map_options" to "default", "map_sliders" to "reset"))
+                check(ex["su_noRuins"] == null && ex[K_WATER] == null && ex[K_SLIDERS] == null)
+            }
+            expectError("setup: unknown map option rejected", "map option") { updateSetup(lobby("su16"), mapOf("map_options" to "no_rivers=on")) }
+
+            // ---- 9. export fairness
+            step("save: export only after the game, or the host with allow_export, or alone vs AI") {
+                val m = lobby("su17").apply { status = Status.RUNNING }   // Ann (host 901) + Ben (902)
+                check(exportBlocker(m, "901", false)!!.contains("ended") && exportBlocker(m, "902", false) != null)
+                setAllowExport(m, true)
+                check(exportBlocker(m, "901", false) == null && exportBlocker(m, "902", false)!!.contains("host"))
+                check(lobbyLines(m).any { it.startsWith("💾") })
+                check(exportBlocker(m, "902", true) == null && exportBlocker(m, "999", true) != null)
+                setAllowExport(m, false); m.seats[1].aiControlled = true
+                check(exportBlocker(m, "901", false) == null)   // the only human left
+                val l = lobby("su18")
+                ModsPlus.updateLobby(l, ModsPlus.LobbyChange(allowExport = true))
+                check(l.settings.extra[K_ALLOW_EXPORT] == "true" && lobbyLines(l).any { it.contains("allow_export") })
+                ModsPlus.updateLobby(l, ModsPlus.LobbyChange(allowExport = false)); check(l.settings.extra[K_ALLOW_EXPORT] == null)
+            }
+
+            // ---- 10. turn history + rollback
+            val store = t.ctl.store
+            step("rollback: start-of-turn snapshots of the running game (newest $HISTORY_KEEP kept)") {
+                val turns = rollbackTurns(orig, store)
+                val now = t.eng { it.turns + 1 }
+                check(turns.size >= 2 && turns.last() <= now && turns.size <= HISTORY_KEEP) { "$turns (now $now)" }
+                check(store.historyGameId(orig.meta.id) == t.eng { it.gameId })
+                println("  [SetupPlus] history of ${orig.meta.id}: turns $turns, now on turn $now (${store.historyDir(orig.meta.id)})")
+                repeat(13) { i -> store.saveHistory("suprune", "g1", i + 1, "x$i", HISTORY_KEEP) }
+                check(store.historyTurns("suprune") == (4..13).toList()) { store.historyTurns("suprune").toString() }
+                store.saveHistory("suprune", "g2", 1, "y", HISTORY_KEEP)
+                check(store.historyTurns("suprune") == listOf(1) && store.historyGameId("suprune") == "g2")   // another game under the same id
+                store.historyDir("suprune").deleteRecursively()
+            }
+            step("rollback: preview, vote of every player, restore, plays on") {
+                val turns = rollbackTurns(orig, store)
+                val target = turns.first()
+                // on a copy, so the extension tests after us and the tab renders see the real game
+                val cm = GameMeta(id = "surb", name = "Rollback copy", hostId = orig.meta.hostId, status = Status.RUNNING).apply {
+                    orig.meta.seats.forEach { s0 -> seats += Seat(s0.userId, s0.userName, s0.nation, s0.civId) }
+                }
+                val copy = Session(cm, t.eng { g -> Engine.deserialize(Engine.serialize(g)) })
+                store.historyDir("surb").deleteRecursively()
+                store.historyDir(orig.meta.id).copyRecursively(store.historyDir("surb"))
+                try {
+                    val now = Engine.withGame(copy.game!!) { it.turns + 1 }
+                    val plan = Engine.withGame(copy.game!!) { rollbackPlanE(copy, store, target) }
+                    check(plan.summary.contains("start of turn $target") && plan.summary.contains("cities")) { plan.summary }
+                    println("  [SetupPlus] rollback preview: ${plan.summary.replace("\n", " | ").take(300)}")
+                    val tooFar = try { Engine.withGame(copy.game!!) { rollbackPlanE(copy, store, now + 3) }; null } catch (e: PlayerError) { e.message }
+                    check(tooFar?.contains("only go back") == true) { "future turn: $tooFar" }
+                    val v = RollbackVote("t1", plan, cm.hostId, cm.seats.filter { !it.aiControlled }.map { it.userId }.toSet())
+                    check(!v.complete && v.text(cm.name).contains("1/2") && voteRows(v).single().components.size == 2)
+                    check(runCatching { v.accept("999") }.exceptionOrNull() is PlayerError)   // not a player
+                    check(v.accept(cm.seats[1].userId) && v.complete)
+                    val msg = Engine.withGame(copy.game!!) { rollbackE(copy, store, plan, t.ctl) }
+                    val (turnNow, curHuman) = Engine.withGame(copy.game!!) { g -> (g.turns + 1) to g.currentPlayerCiv.isHuman() }
+                    check(turnNow == target && curHuman && store.historyTurns("surb").all { it <= target }) { "now $turnNow, history ${store.historyTurns("surb")}" }
+                    check(cm.events.last().startsWith("⏪"))
+                    val stale = try { Engine.withGame(copy.game!!) { rollbackE(copy, store, plan) }; null } catch (e: PlayerError) { e.message }
+                    check(target == now || stale?.contains("moved on") == true) { "stale plan: $stale" }
+                    Engine.withGame(copy.game!!) { g -> GameOps.endTurn(g, g.currentPlayerCiv) }   // and it plays on
+                    println("  [SetupPlus] $msg (from turn $now)")
+                } finally { store.delete("surb") }
+            }
+            expectError("rollback: unknown turn rejected", "no snapshot") {
+                t.eng { rollbackPlanE(orig, store, 0) }
             }
         } catch (e: Throwable) {
             failures += "setup: ${e.javaClass.simpleName}: ${e.message}"; e.printStackTrace()

@@ -90,7 +90,12 @@ class Store(val dir: File) {
         setElementType(Settings::class.java, "extra", String::class.java)
     }
 
-    init { dir.mkdirs() }
+    init { dir.mkdirs(); current = this }
+
+    companion object {
+        /** The bot's store (the last one created) — for engine hooks that only get a Session (SetupPlus turn history). */
+        @Volatile var current: Store? = null
+    }
 
     fun loadAll() {
         for (f in dir.listFiles { f -> f.name.endsWith(".meta.json") }.orEmpty()) {
@@ -119,13 +124,38 @@ class Store(val dir: File) {
     fun archive(id: String) {
         val arch = File(dir, "finished").apply { mkdirs() }
         for (ext in listOf(".meta.json", ".civ")) File(dir, "$id$ext").takeIf { it.exists() }?.renameTo(File(arch, "$id$ext"))
+        historyDir(id).deleteRecursively()
         sessions.remove(id)
     }
 
     fun delete(id: String) {
         for (ext in listOf(".meta.json", ".civ")) File(dir, "$id$ext").delete()
+        historyDir(id).deleteRecursively()
         sessions.remove(id)
     }
+
+    // ---- turn history (start-of-turn snapshots for rollback, like Unciv's autosaves): <id>.history/t<turn>.civ
+    fun historyDir(id: String) = File(dir, "${id.replace(Regex("[^A-Za-z0-9_-]"), "")}.history")
+    /** Turns with a snapshot, oldest first. */
+    fun historyTurns(id: String): List<Int> = historyDir(id).listFiles().orEmpty()
+        .mapNotNull { f -> f.name.takeIf { it.startsWith("t") && it.endsWith(".civ") }?.removePrefix("t")?.removeSuffix(".civ")?.toIntOrNull() }.sorted()
+    fun historyFile(id: String, turn: Int) = File(historyDir(id), "t$turn.civ")
+    /** Stores [text] as the snapshot of [turn] for game [gameId] (a different game under the same id wipes the old history); keeps the newest [keep]. */
+    fun saveHistory(id: String, gameId: String, turn: Int, text: String, keep: Int) {
+        val d = historyDir(id).apply { mkdirs() }
+        val marker = File(d, "game.id")
+        if (marker.isFile && marker.readText().trim() != gameId) d.listFiles().orEmpty().forEach { it.delete() }
+        if (!marker.isFile) marker.writeText(gameId)
+        atomicWrite(historyFile(id, turn), text)
+        historyTurns(id).dropLast(keep).forEach { historyFile(id, it).delete() }
+    }
+    /** The game id the history of [id] belongs to (null = none). */
+    fun historyGameId(id: String): String? = File(historyDir(id), "game.id").takeIf { it.isFile }?.readText()?.trim()
+
+    /** Metadata of finished games (in finished/). */
+    fun finishedMetas(): List<GameMeta> = File(dir, "finished").listFiles { f -> f.name.endsWith(".meta.json") }.orEmpty()
+        .mapNotNull { f -> runCatching { json.fromJson(GameMeta::class.java, f.readText()) }.getOrNull() }
+    fun finishedSave(id: String) = File(File(dir, "finished"), "$id.civ")
 
     private fun atomicWrite(target: File, text: String) {
         val tmp = File(target.parentFile, target.name + ".tmp")

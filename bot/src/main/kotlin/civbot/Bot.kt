@@ -59,8 +59,8 @@ class Bot(override val store: Store, override val ctl: Controller) : ListenerAda
                 SubcommandData("new", "Open a lobby for a new game in this channel").addOptions(
                     OptionData(OptionType.STRING, "name", "Name for the game"),
                     speed,
-                    OptionData(OptionType.INTEGER, "city_states", "How many city-states (default 4)")
-                        .also { o -> (0..12).forEach { n -> o.addChoice(if (n == 0) "None" else "$n city-states", n.toLong()) } },
+                    OptionData(OptionType.INTEGER, "city_states", "How many city-states (default 4, up to what the rules have)")
+                        .setRequiredRange(0, SetupPlus.maxCityStates(GameMeta()).toLong()),
                     OptionData(OptionType.BOOLEAN, "barbarians", "Barbarians on/off (default on)"),
                     OptionData(OptionType.BOOLEAN, "fog", "Fog of war (default on). Off = everyone sees the whole map"),
                     OptionData(OptionType.BOOLEAN, "thread", "Play in a dedicated thread (default on)"),
@@ -179,7 +179,7 @@ class Bot(override val store: Store, override val ctl: Controller) : ListenerAda
             hostId = event.user.id,
         )
         meta.settings.speed = event.getOption("speed")?.asString ?: "Quick"
-        event.getOption("city_states")?.let { meta.settings.cityStates = it.asInt }
+        event.getOption("city_states")?.let { meta.settings.cityStates = it.asInt.coerceIn(0, SetupPlus.maxCityStates(meta)) }
         event.getOption("barbarians")?.let { meta.settings.barbarians = it.asBoolean }
         event.getOption("fog")?.let { meta.settings.fogOfWar = it.asBoolean }
         if (event.getOption("thread")?.asBoolean == false || !canThread) meta.threadId = "-"
@@ -207,7 +207,7 @@ class Bot(override val store: Store, override val ctl: Controller) : ListenerAda
         addField("Settings", "🗺️ ${st.mapSize} · ${st.mapType}\n⚖️ ${st.difficulty} · ⏱️ ${st.speed}\n" +
             "🤖 ${st.aiCivs} AI civs · 🏰 ${st.cityStates} city-states · ${if (st.barbarians) "🪓 barbarians" else "no barbarians"} · " +
             (if (st.fogOfWar) "🌫️ fog of war" else "👁️ no fog") +
-            "\n🏺 starts in ${st.startEra} · 🏆 ${st.victoryTypes.ifEmpty { GameOps.VICTORIES }.joinToString()}" +
+            "\n🏺 starts in ${st.startEra} · 🏆 ${st.victoryTypes.ifEmpty { SetupPlus.rules(meta).victories }.joinToString()}" +
             (if (st.worldWrap) " · 🌐 world wrap" else "") +
             (if (st.autoSkipHours > 0) "\n⏩ AFK turns auto-end after ${st.autoSkipHours}h" else "") +
             Extensions.all.flatMap { runCatching { it.lobbyLines(meta) }.getOrDefault(emptyList()) }.joinToString("") { "\n$it" }, false)
@@ -230,27 +230,28 @@ class Bot(override val store: Store, override val ctl: Controller) : ListenerAda
             ),
             ActionRow.of(sel("size", "Map size", GameOps.MAP_SIZES, st.mapSize)),
             ActionRow.of(sel("type", "Map type", GameOps.MAP_TYPES, st.mapType)),
-            ActionRow.of(sel("diff", "Difficulty", GameOps.DIFFICULTIES, st.difficulty)),
+            ActionRow.of(sel("diff", "Difficulty", SetupPlus.rules(meta).difficulties.take(25), st.difficulty)),
             ActionRow.of(sel("ai", "AI opponents", (0..SetupPlus.maxAiChoice(meta)).map { it.toString() }, st.aiCivs.toString())),
         )
     }
 
-    private fun moreSettingsRows(meta: GameMeta): List<ActionRow> {
+    private fun moreSettingsRows(meta: GameMeta, csPage: Int = -1): List<ActionRow> {
         val g = meta.id
         val st = meta.settings
+        val rules = SetupPlus.rules(meta)   // lists of the lobby's ruleset (base + mods); raw selects hold at most 25
         fun opt(label: String, value: String, def: Boolean) =
             net.dv8tion.jda.api.interactions.components.selections.SelectOption.of(label, value).withDefault(def)
         fun onOff(b: Boolean) = if (b) "on" else "off"
         return listOf(
             ActionRow.of(StringSelectMenu.create(Panel.id(g, "xset", "speed")).setPlaceholder("Game speed")
-                .addOptions(GameOps.SPEEDS.map { opt("Speed: $it", it, it == st.speed) }).build()),
-            ActionRow.of(StringSelectMenu.create(Panel.id(g, "xset", "cs")).setPlaceholder("City-states")
-                .addOptions((0..12).map { opt(if (it == 0) "No city-states" else "$it city-states", it.toString(), it == st.cityStates) }).build()),
+                .addOptions(rules.speeds.take(25).map { opt("Speed: $it", it, it == st.speed) }).build()),
+            ActionRow.of(StringSelectMenu.create(Panel.id(g, "xset", "cs")).setPlaceholder("City-states (up to ${rules.maxCityStates})")
+                .addOptions(SetupPlus.cityStateOptions(meta, csPage).map { opt(it.label, it.value, it.default) }).build()),
             ActionRow.of(StringSelectMenu.create(Panel.id(g, "xset", "era")).setPlaceholder("Starting era")
-                .addOptions(GameOps.ERAS.map { opt("Start in the $it", it, it == st.startEra) }).build()),
+                .addOptions(rules.eras.ifEmpty { listOf(st.startEra) }.take(25).map { opt("Start in the $it", it, it == st.startEra) }).build()),
             ActionRow.of(StringSelectMenu.create(Panel.id(g, "xset", "vic")).setPlaceholder("Victory types (pick any)")
-                .addOptions(GameOps.VICTORIES.map { opt("$it victory", it, st.victoryTypes.isEmpty() || it in st.victoryTypes) })
-                .setRequiredRange(1, GameOps.VICTORIES.size).build()),
+                .addOptions(rules.victories.ifEmpty { GameOps.VICTORIES }.take(25).let { vs -> vs.map { opt("$it victory", it, st.victoryTypes.isEmpty() || it in st.victoryTypes) } })
+                .setRequiredRange(1, rules.victories.ifEmpty { GameOps.VICTORIES }.take(25).size).build()),
             ActionRow.of(
                 Button.secondary(Panel.id(g, "xtog", "barb"), "Barbarians: ${onOff(st.barbarians)}").withEmoji(Emoji.fromUnicode("🪓")),
                 Button.secondary(Panel.id(g, "xtog", "fog"), "Fog: ${onOff(st.fogOfWar)}").withEmoji(Emoji.fromUnicode("🌫️")),
@@ -275,26 +276,30 @@ class Bot(override val store: Store, override val ctl: Controller) : ListenerAda
         when (verb) {
             "nation" -> {
                 if (meta.seatOf(uid) == null) return event.reply("Join the game first.").setEphemeral(true).queue()
-                val taken = meta.seats.filter { it.userId != uid }.map { it.nation }.toSet()
-                val nations = Engine.run { GameOps.majorNations(meta) }.filter { it !in taken }
-                val rows = nations.chunked(24).take(4).mapIndexed { i, chunk ->
-                    ActionRow.of(StringSelectMenu.create(Panel.id(meta.id, "pick", i.toString()))
-                        .setPlaceholder("Nations ${chunk.first().first()}–${chunk.last().first()}")
-                        .addOptions((if (i == 0) listOf("Random") else emptyList<String>()).plus(chunk).map {
-                            net.dv8tion.jda.api.interactions.components.selections.SelectOption.of(it, it)
-                        }).build())
-                }
-                event.reply("Choose your nation:").setEphemeral(true).setComponents(rows).queue()
+                // leader + unique ability on every option; nations Unciv hides from new games are left out (SetupPlus)
+                event.reply("Choose your nation:").setEphemeral(true).setComponents(SetupPlus.nationPickerRows(meta, uid)).queue()
                 return
             }
-            "pick" -> {
+            "ndet" -> return event.reply("📖 Pick a nation to read about:").setEphemeral(true)
+                .setComponents(SetupPlus.nationPickerRows(meta, uid, verb = "ndsel", withDetails = false, withRandom = false)).queue()
+            "ndsel" -> {
                 val value = (event as StringSelectInteractionEvent).values.first()
+                val embed = try { SetupPlus.nationDetails(meta, value) } catch (e: PlayerError) { return event.reply("❌ ${e.message}").setEphemeral(true).queue() }
+                val rows = SetupPlus.nationPickerRows(meta, uid, verb = "ndsel", withDetails = false, withRandom = false).take(4) +
+                    (if (meta.seatOf(uid) != null) listOf(ActionRow.of(Button.success(Panel.id(meta.id, "ndpick", value), "Play as $value".take(80)).withEmoji(Emoji.fromUnicode("🏳️")))) else emptyList())
+                return event.editMessage("📖 Nation details").setEmbeds(embed).setComponents(rows).queue()
+            }
+            "pick", "ndpick" -> {
+                if (meta.seatOf(uid) == null) return event.reply("Join the game first.").setEphemeral(true).queue()
+                val value = if (verb == "ndpick") args.firstOrNull() ?: return else (event as StringSelectInteractionEvent).values.first()
+                if (value != "Random" && SetupPlus.rules(meta).nation(value) == null)
+                    return event.reply("**$value** can't be picked in this game.").setEphemeral(true).queue()
                 synchronized(meta) {
                     if (value != "Random" && meta.seats.any { it.userId != uid && it.nation == value })
                         return event.reply("$value was just taken — pick another.").setEphemeral(true).queue()
                     meta.seatOf(uid)?.nation = value
                 }
-                event.editMessage("You'll play as **$value**.").setComponents().queue()
+                event.editMessage("You'll play as **$value**.").setEmbeds().setComponents().queue()
                 lobbyMessageEdit(meta)
                 return
             }
@@ -310,7 +315,12 @@ class Bot(override val store: Store, override val ctl: Controller) : ListenerAda
                     val values = (event as StringSelectInteractionEvent).values
                     when (args[0]) {
                         "speed" -> st.speed = values.first()
-                        "cs" -> st.cityStates = values.first().toInt()
+                        "cs" -> values.first().let { v ->
+                            // ◀/▶ entries page through 0 … the ruleset's city-state count
+                            if (v.startsWith("pg:")) return event.editMessage("⚙️ **More settings** for ${meta.name}")
+                                .setComponents(moreSettingsRows(meta, v.removePrefix("pg:").toIntOrNull() ?: 0)).queue()
+                            st.cityStates = v.toInt().coerceIn(0, SetupPlus.maxCityStates(meta))
+                        }
                         "era" -> st.startEra = values.first()
                         "vic" -> st.victoryTypes = ArrayList(values)
                     }
@@ -555,7 +565,7 @@ class Bot(override val store: Store, override val ctl: Controller) : ListenerAda
     override fun onButtonInteraction(event: ButtonInteractionEvent) = onComponent(event)
     override fun onStringSelectInteraction(event: StringSelectInteractionEvent) = onComponent(event)
 
-    private val lobbyVerbs = setOf("join", "leave", "nation", "pick", "start", "cancel", "set", "more", "xset", "xtog")
+    private val lobbyVerbs = setOf("join", "leave", "nation", "pick", "start", "cancel", "set", "more", "xset", "xtog", "ndet", "ndsel", "ndpick")
 
     private fun onComponent(event: GenericComponentInteractionCreateEvent) {
         val parts = event.componentId.split("|")
@@ -744,7 +754,7 @@ class Bot(override val store: Store, override val ctl: Controller) : ListenerAda
         **🤖 Auto-pick** lets the AI fill in anything you skipped. **✅ End turn** passes play on; AIs move automatically.
 
         `/civ play` panel · `/civ board` re-post board · `/civ spectate` watch · `/civ leave` hand your civ to the AI
-        Host: `/civ kick @player` · `/civ host @player` · `/civ end` · `/civ lobby` (mods, map, scenario) · `/civ setup` (every other option) · `/civ save import` · `/civ espionage`
-        Admins: `/civ mod` (install Unciv mods from GitHub) · `/civ map` (upload custom maps) · Anyone: `/civ wiki` · Players: `/civ save export` (download the game for desktop Unciv)
+        Host: `/civ kick @player` · `/civ host @player` · `/civ end` · `/civ lobby` (mods, map, scenario) · `/civ setup` (every other option) · `/civ save import` · `/civ espionage` · `/civ rollback` (players vote)
+        Admins: `/civ mod` (browse + install Unciv mods from GitHub) · `/civ map` (upload custom maps) · Anyone: `/civ wiki` · Players: `/civ save export` (download the game for desktop Unciv once it's over)
     """.trimIndent()).build()
 }
