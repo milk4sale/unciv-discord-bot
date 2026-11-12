@@ -128,6 +128,8 @@ interface BotApi {
 
 interface Extension {
     val tabs: List<ExtTab> get() = emptyList()
+    /** Your verbs that only change what's shown (no undo snapshot is taken for them) */
+    val viewVerbs: Set<String> get() = emptySet()
     fun renderTab(tabId: String, t: TabCtx) {}
     /** Return true if this extension handled [verb]. Throw PlayerError for player-facing problems. */
     fun handle(verb: String, ctx: ActionCtx): Boolean = false

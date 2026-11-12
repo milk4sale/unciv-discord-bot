@@ -58,8 +58,14 @@ object GameOps {
 
     // ------------------------------------------------------------------ setup
 
-    fun majorNations(): List<String> {
-        val rs = com.unciv.models.ruleset.RulesetCache[com.unciv.models.metadata.BaseRuleset.Civ_V_GnK.fullName]!!
+    /** Major nations available for this lobby (respects selected mods / base ruleset). */
+    fun majorNations(meta: GameMeta? = null): List<String> {
+        val base = com.unciv.models.metadata.BaseRuleset.Civ_V_GnK.fullName
+        val rs = try {
+            if (meta != null && (meta.settings.mods.isNotEmpty() || meta.settings.extra["baseRuleset"] != null))
+                com.unciv.models.ruleset.RulesetCache.getComplexRuleset(LinkedHashSet(meta.settings.mods), meta.settings.extra["baseRuleset"] ?: base)
+            else com.unciv.models.ruleset.RulesetCache[base]!!
+        } catch (_: Exception) { com.unciv.models.ruleset.RulesetCache[base]!! }
         return rs.nations.values.filter { it.isMajorCiv }.map { it.name }.sorted()
     }
 
@@ -110,6 +116,13 @@ object GameOps {
     fun yearText(game: GameInfo): String {
         val y = game.getYear()
         return if (y < 0) "${-y} BC" else "$y AD"
+    }
+
+    /** "Production" instead of Unciv's bare stat symbol */
+    fun focusName(f: com.unciv.logic.city.CityFocus): String = when (f) {
+        com.unciv.logic.city.CityFocus.NoFocus -> "Default"
+        com.unciv.logic.city.CityFocus.Manual -> "Manual"
+        else -> f.name.removeSuffix("Focus").replace(Regex("([a-z])([A-Z])"), "$1 + $2")
     }
 
     fun unitEmoji(u: MapUnit) = when {
@@ -172,7 +185,8 @@ object GameOps {
         else u.movement.getDistanceToTiles().keys.filter { it != u.getTile() && u.movement.canMoveTo(it) }.toSet()
 
     fun attackableTargets(u: MapUnit): List<AttackableTile> {
-        if (!u.canAttack() || !u.hasMovement()) return emptyList()
+        // Nukes go through MilitaryPlus's targeted, confirmed "Nuke a tile…" flow, never the plain attack list
+        if (!u.canAttack() || !u.hasMovement() || u.isNuclearWeapon()) return emptyList()
         return TargetHelper.getAttackableEnemies(u, u.movement.getDistanceToTiles())
             .filter { it.tileToAttack.isVisible(u.civ) }
             .distinctBy { it.tileToAttack }
@@ -292,7 +306,7 @@ object GameOps {
         if (!u.canFortify() && !u.isSleeping() && u.hasMovement()) out += Choice("sleep", "Sleep", "Stays put until woken", "💤")
         if (u.hasMovement()) out += Choice("skip", "Skip this turn", "", "⏭️")
         out += Choice("disband", "Disband unit", "Removes the unit", "🗑️")
-        return out
+        return out.sortedBy { if (it.id == "do:cp_undo") 0 else 1 } // ↩️ Undo always first
     }
 
     fun doUnitChoice(u: MapUnit, id: String): String {
@@ -606,8 +620,15 @@ object GameOps {
         if ("vote" !in skip) Engine.callHidden(NextTurnAutomation, "tryVoteForDiplomaticVictory", civView)
         if ("alerts" in skip) { try { TradeAutomation.respondToTradeRequests(civ, true) } catch (_: Exception) {}; return notes }
         // AI demands / friendship / trade offers aimed at this player
-        civ.popupAlerts.removeAll { it.type != AlertType.CityConquered && it.type != AlertType.DemandToStopSettlingCitiesNear && it.type != AlertType.DeclarationOfFriendship }
+        // Keep every alert the AI responder knows how to answer (all demand types + friendship offers);
+        // drop purely informational ones. Never touch captured-city decisions.
+        val answerable = com.unciv.logic.civilization.diplomacy.Demand.entries.map { it.demandAlert }.toSet() +
+            AlertType.CityConquered + AlertType.DeclarationOfFriendship
+        civ.popupAlerts.removeAll { it.type !in answerable }
+        // Unciv's responder clears ALL alerts afterwards; keep captured-city decisions for the player
+        val conquests = civ.popupAlerts.filter { it.type == AlertType.CityConquered }
         Engine.callHidden(NextTurnAutomation, "respondToPopupAlerts", civView)
+        civ.popupAlerts.addAll(conquests.filter { c -> civ.popupAlerts.none { it.type == c.type && it.value == c.value } })
         try { TradeAutomation.respondToTradeRequests(civ, true) } catch (_: Exception) {}
         return notes
     }

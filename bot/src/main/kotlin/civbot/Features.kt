@@ -236,7 +236,7 @@ object Features {
         else if (city.canBeDestroyed()) out += Choice("raze", "Raze this city", "Burns down over several turns", "🔥")
         if (city.cityConstructions.constructionQueue.size > 1) out += Choice("clearq", "Clear the build queue", "Keeps the current item", "🧹")
         for ((focus, e) in focusEmoji) if (focus != city.getCityFocus())
-            out += Choice("focus:${focus.name}", "Focus: ${focus.label.ifEmpty { focus.name }}", "Citizens favour this", e)
+            out += Choice("focus:${focus.name}", "Focus: ${GameOps.focusName(focus)}", "Citizens favour this", e)
         val buyable = city.tilesInRange.filter { city.expansion.canBuyTile(it) }
             .map { it to city.expansion.getGoldCostOfTile(it) }.sortedBy { it.second }.take(5)
         for ((t, cost) in buyable) {
@@ -258,7 +258,7 @@ object Features {
         id.startsWith("focus:") -> {
             val f = CityFocus.valueOf(id.removePrefix("focus:"))
             city.setCityFocus(f); city.reassignPopulation()
-            "${focusEmoji[f] ?: ""} ${city.name} now focuses on ${f.label.ifEmpty { f.name }}."
+            "${focusEmoji[f] ?: ""} ${city.name} now focuses on ${GameOps.focusName(f)}."
         }
         id.startsWith("tile:") -> {
             val (x, y) = id.removePrefix("tile:").split(",").map { it.toInt() }

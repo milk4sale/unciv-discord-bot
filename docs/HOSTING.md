@@ -33,6 +33,38 @@ Most of these can also be set up front: `/civ new name:… speed:… city_states
 **Size guide:** Tiny or Small with 2–4 civilizations makes a quick game over an evening or two.
 Medium or Large with 6–10 is a long campaign.
 
+## Mods, custom maps and scenarios
+
+CivBot can use [Unciv mods](https://github.com/topics/unciv-mod): new nations, units, rules, or
+whole rulesets. It can also use maps made in Unciv's map editor, and scenarios shipped in mods.
+
+**Server admins** (members with *Manage Server*):
+
+| Command | What it does |
+|---|---|
+| `/civ mod action:list` | installed mods (base ruleset or extension, contents, scenarios) |
+| `/civ mod action:install url:https://github.com/<owner>/<repo>` | downloads a mod from GitHub (max 50 MB) and loads it |
+| `/civ mod action:remove name:<mod>` | removes a mod (refused while a game uses it) |
+| `/civ map action:upload file:<map file>` | adds a map made in Unciv's map editor (max 10 MB) |
+| `/civ map action:list` · `action:remove name:<map>` | list or delete maps |
+
+**The host**, in the lobby:
+
+| Command | What it does |
+|---|---|
+| `/civ lobby` | shows what's selected and what's available |
+| `/civ lobby add_mod:<mod>` / `remove_mod:<mod>` / `clear_mods:True` | choose extension mods |
+| `/civ lobby base:<mod>` | play on a different base ruleset (`default` = Civ V Gods & Kings) |
+| `/civ lobby map:<map>` | play on a custom map (`generated` to go back) |
+| `/civ lobby scenario:<scenario>` | start from a scenario in an installed mod (`none` to go back) |
+| `/civ espionage enabled:True` | turn spies on for this game |
+
+Incompatible mod combinations, maps that are too small for the number of civs, and scenarios
+with fewer playable civs than players are all rejected with an explanation before the game
+starts. A map's required mods are added automatically. **Map editor:** Discord has no room for
+one, so make maps in Unciv on desktop or Android, then upload the `.map` file with
+`/civ map action:upload`.
+
 ## Threads
 
 By default each game is played in a **thread** created from the lobby message, which keeps your
@@ -49,6 +81,7 @@ Several games can run at once, in the same channel or in different ones.
 | `/civ kick @player` | removes a player: the AI takes over their civilization and the game continues |
 | `/civ host @player` | hands host rights to another player in the game |
 | `/civ end` | ends the game for everyone (asks for confirmation) |
+| `/civ lobby …`, `/civ espionage …` | lobby only: mods, map, scenario, spies (see above) |
 
 Any player can use `/civ leave` to hand their own civilization to the AI.
 

@@ -51,7 +51,7 @@ class Controller(val store: Store) {
             var result: TurnResult? = null
             if (verb != "end") st.confirmEnd = false
             val citiesBefore = civ.cities.map { it.id }.toSet()
-            if (mine && verb !in VIEW_VERBS) Extensions.all.forEach { it.beforeMutation(s, seat, verb) }
+            if (mine && verb !in VIEW_VERBS && Extensions.all.none { verb in it.viewVerbs }) Extensions.all.forEach { it.beforeMutation(s, seat, verb) }
 
             when (verb) {
                 "tab" -> st.tab = args.firstOrNull() ?: value!!

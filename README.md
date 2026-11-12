@@ -23,20 +23,33 @@ Discord, with nothing to install as a player.
 
 | Panel tab | Features |
 |---|---|
-| ⚔️ **Units** | move with arrow buttons or 🎯 *Go to* a tile code / city; found cities; build roads, farms, mines…; fortify, sleep, explore, automate; attack; promotions and upgrades; escort pairs; pillage; paradrop; Great Person abilities; missionaries and prophets |
-| 🏙️ **Cities** | production with an optional 📋 queue; buy with gold or faith; city bombard; citizen focus; buy tiles; annex puppets; raze / stop razing |
+| ⚔️ **Units** | move with arrow buttons or 🎯 *Go to* a tile code / city; found cities; build roads, farms, mines… and queue the next improvement; fortify, sleep, explore, automate; attack; promotions and upgrades; escort pairs; pillage; paradrop; gift units to city-states; rename; Great Person abilities; missionaries and prophets; **↩️ undo** |
+| 🏙️ **Cities** | production with an optional 📋 queue; buy with gold or faith; city bombard; citizen focus; buy tiles; sell buildings; rename; annex puppets; raze / stop razing; **↩️ undo** |
+| 👥 **Citizens** | choose exactly which tiles each city works, lock tiles, assign specialists, avoid growth |
+| 🎖️ **Military** | army overview, wars and enemies in range, ☢️ nukes with a blast preview and a confirm step, ✈️ air sweeps, air strikes, rebasing to cities or carriers |
 | 🔬 **Research** | pick the next tech (each option lists what it unlocks) or set a far-off goal and the whole path is queued |
 | 📜 **Policies** | adopt social policies when your culture allows |
 | 🙏 **Religion** | found a pantheon, name your religion, choose founder / follower / enhancer beliefs |
-| 🤝 **Diplomacy** | a deal builder (gold, gold per turn, luxuries, strategic resources, techs, embassies, open borders, research agreements, defensive pacts, peace), war, friendship, denouncing |
+| 🤝 **Diplomacy** | a deal builder (gold, gold per turn, luxuries, strategic resources, techs, **cities**, embassies, open borders, research agreements, defensive pacts, **asking a third civ to join a war**, peace), war, friendship, denouncing |
 | 🏰 **City-states** | gold gifts, pledge protection, demand tribute, see influence, allies and quests |
+| 🕵️ **Espionage** | move spies to steal technology, rig city-state elections, stage coups, or guard your own cities |
+| 🗳️ **World Congress** | vote for world leader, see the tally and what's needed to win |
+| 📨 **Inbox** | answer AI demands, friendship offers and AI trade offers yourself; news |
+| ✨ **Beliefs** | expand your pantheon, add free beliefs to your religion |
 | 📊 **Overview** | empire stats, happiness breakdown, golden ages, resources, rankings, Great People, recent history |
+| 🏆 **Victory** | progress towards every victory type (spaceship parts, policy trees, capitals, votes, time), score ranking |
+| 📖 **Civilopedia** | every unit, building, wonder, tech, policy, belief, resource, terrain and nation, with search and pixel art |
 | 🗺️ **Map** | scroll anywhere, 🔍 inspect any tile, 🌍 view the whole explored world |
 
-Plus a lobby with full game settings, one thread per game, turn pings and reminders, optional
-AFK auto-skip, deals and peace offers between human players with Accept/Decline buttons,
-captured-city decisions, spectating, and host tools. An optional **Discord Activity** add-on
-shows the same panel as an embedded web app.
+Plus:
+- a lobby with full game settings, including **Unciv mods from GitHub**, **custom maps** made in
+  Unciv's map editor, **scenarios** and **espionage**
+- one thread per game, with turn pings and reminders, and optional AFK auto-skip
+- deals, peace and friendship offers between human players, answered with Accept/Decline buttons
+- captured-city decisions, spectating and host tools
+- `/civ wiki` lookups for anyone, even outside a game
+
+An optional **Discord Activity** add-on shows the same panel as an embedded web app.
 
 ## Quick start
 
@@ -78,6 +91,9 @@ walks you through it with every click.
 | `/civ spectate` | watch a game you're not in |
 | `/civ leave` | hand your civilization to the AI |
 | `/civ kick @player` · `/civ host @player` · `/civ end` | host tools |
+| `/civ lobby …` · `/civ espionage` | host: pick mods, base rules, custom map, scenario; turn spies on |
+| `/civ mod …` · `/civ map …` | list, install or remove Unciv mods (from GitHub) and custom maps (Manage Server) |
+| `/civ wiki query:…` | Civilopedia lookup for anyone |
 | `/civ help` | in-Discord quick guide |
 
 ## Credits and license

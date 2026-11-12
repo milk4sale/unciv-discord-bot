@@ -9,7 +9,7 @@ import java.io.File
  * tab and feature, renders every tab to PNG and checks save/load. Prints a feature checklist.
  */
 object SelfTest {
-    private const val TURNS = 6 // human turns (two players -> ~35 game turns)
+    private const val TURNS = 30 // human turns (two players -> ~15 game turns)
     private val hits = LinkedHashMap<String, Int>()
     private val errors = ArrayList<String>()
     private fun hit(name: String) { hits[name] = (hits[name] ?: 0) + 1 }

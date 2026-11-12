@@ -275,7 +275,7 @@ class Bot(override val store: Store, override val ctl: Controller) : ListenerAda
             "nation" -> {
                 if (meta.seatOf(uid) == null) return event.reply("Join the game first.").setEphemeral(true).queue()
                 val taken = meta.seats.filter { it.userId != uid }.map { it.nation }.toSet()
-                val nations = Engine.run { GameOps.majorNations() }.filter { it !in taken }
+                val nations = Engine.run { GameOps.majorNations(meta) }.filter { it !in taken }
                 val rows = nations.chunked(24).take(4).mapIndexed { i, chunk ->
                     ActionRow.of(StringSelectMenu.create(Panel.id(meta.id, "pick", i.toString()))
                         .setPlaceholder("Nations ${chunk.first().first()}–${chunk.last().first()}")
@@ -380,7 +380,11 @@ class Bot(override val store: Store, override val ctl: Controller) : ListenerAda
         val meta = s.meta
         if (meta.seats.size + meta.settings.aiCivs < 2) throw PlayerError("You need at least 2 civilizations (add AI opponents or more players).")
         hook.editOriginalEmbeds(EmbedBuilder().setTitle("🌍 ${meta.name}").setDescription("⏳ Generating the world…").build()).setComponents().queue()
-        val game = Engine.run { GameOps.startGame(meta) }
+        val game = try { Engine.run { GameOps.startGame(meta) } } catch (e: Exception) {
+            log.warn("Game start failed for {}", meta.id, e)
+            hook.editOriginalEmbeds(lobbyEmbed(meta)).setComponents(lobbyRows(meta)).queue()
+            throw if (e is PlayerError) e else PlayerError("Couldn't create the world: ${e.message}. Check the lobby settings (map, mods, scenario) and try again.")
+        }
         s.game = game
         meta.status = Status.RUNNING
         meta.turnStartedAt = System.currentTimeMillis()
@@ -728,10 +732,13 @@ class Bot(override val store: Store, override val ctl: Controller) : ListenerAda
         🏰 **City-states** — gifts, protection, tribute, quests
         📊 **Overview** — empire stats, happiness, resources, rankings, Great People
         🗺️ **Map** — scroll around, 🔍 inspect any tile, 🌍 world map
+        Also: 👥 **Citizens** (work tiles, specialists) · 🎖️ **Military** (nukes, air units) · 🕵️ **Espionage** · 🗳️ **World Congress** · 📨 **Inbox** (AI demands & offers) · ✨ **Beliefs** · 🏆 **Victory** progress · 📖 **Civilopedia**
+        ↩️ **Undo** is the first entry in the Unit/City action menus.
 
         **🤖 Auto-pick** lets the AI fill in anything you skipped. **✅ End turn** passes play on; AIs move automatically.
 
         `/civ play` panel · `/civ board` re-post board · `/civ spectate` watch · `/civ leave` hand your civ to the AI
-        Host: `/civ kick @player` · `/civ host @player` · `/civ end`
+        Host: `/civ kick @player` · `/civ host @player` · `/civ end` · `/civ lobby` (mods, map, scenario) · `/civ espionage`
+        Admins: `/civ mod` (install Unciv mods from GitHub) · `/civ map` (upload custom maps) · Anyone: `/civ wiki`
     """.trimIndent()).build()
 }

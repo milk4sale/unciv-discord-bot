@@ -134,7 +134,7 @@ class Store(private val dir: File) {
     }
 
     fun byChannel(channelId: String) = sessions.values.filter {
-        it.meta.status != Status.ENDED && (it.meta.threadId == channelId || (it.meta.threadId.isEmpty() && it.meta.channelId == channelId))
+        it.meta.status != Status.ENDED && (it.meta.threadId == channelId || ((it.meta.threadId.isEmpty() || it.meta.threadId == "-") && it.meta.channelId == channelId))
     }
     fun forUser(userId: String) = sessions.values.filter { s -> s.meta.status != Status.ENDED && s.meta.seats.any { it.userId == userId } }
 }

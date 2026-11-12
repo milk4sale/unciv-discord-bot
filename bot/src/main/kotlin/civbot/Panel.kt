@@ -211,7 +211,7 @@ object Panel {
                         "🍞 +${s.food.toInt()} ($growth) · ⚙️ +${s.production.toInt()} · 💰 +${s.gold.toInt()} · 🔬 +${s.science.toInt()} · 🎭 +${s.culture.toInt()} · 🙏 +${s.faith.toInt()}\n" +
                             "🏗️ Building: **${cur.ifEmpty { "nothing!" }}**" + (if (cur.isNotEmpty()) " (${cc.turnsToConstruction(cur)} turns)" else "") +
                             Features.queueText(city) +
-                            "\n🎯 Focus: ${city.getCityFocus().label.ifEmpty { "Default" }} · ❤️ ${city.health} HP · 🛡️ ${city.getStrength()}" +
+                            "\n🎯 Focus: ${GameOps.focusName(city.getCityFocus())} · ❤️ ${city.health} HP · 🛡️ ${city.getStrength()}" +
                             (if (city.religion.getMajorityReligion() != null) " · 🙏 ${city.religion.getMajorityReligion()!!.getReligionDisplayName()}" else "") +
                             "\n🏠 ${cc.getBuiltBuildings().filter { !it.isAnyWonder() }.count()} buildings" +
                             cc.getBuiltBuildings().filter { it.isAnyWonder() }.joinToString { it.name }.let { if (it.isEmpty()) "" else " · 🏛️ $it" } +
@@ -238,6 +238,7 @@ object Panel {
                     cityActs += Extensions.all.flatMap { runCatching { it.cityChoices(city, st.window) }.getOrDefault(emptyList()) }
                     cityActs += Features.cityExtraChoices(city, st.window)
                 }
+                cityActs.sortBy { if (it.id == "do:cp_undo") 0 else 1 } // ↩️ Undo always first
                 rows += ActionRow.of(select(id(gid, "cact"), if (cityActs.isEmpty()) "No city actions right now" else "Buy, bombard, focus, tiles, raze…", cityActs.take(25), enabled = myTurn))
                 endRow += listOf(
                     btn(gid, "cprev", "Prev", "◀️", enabled = cities.size > 1),

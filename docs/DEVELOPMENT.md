@@ -28,6 +28,31 @@
   called through reflection (`Engine.callHidden`), so if Unciv renames one, that call is skipped
   with a warning instead of crashing.
 
+## Extensions (feature modules)
+
+Most features beyond the basics live in **extension objects**, one file each, registered in
+`Extensions.all` (`Ext.kt`). An extension can contribute:
+- panel tabs
+- entries in the Unit and City action menus
+- panel verbs
+- text-input popups (`ask:<verb>` values or `askButton`)
+- direct actions (`do:<verb>` values)
+- `/civ` subcommands
+- game-setup hooks (`applyToSetup`, `createGame`, `onEngineInit`, `lobbyLines`)
+- turn hooks (`beforeMutation` for undo, `onTurnEnded`, `advisorSkips`)
+- its own `selfTest`
+
+| File | Features |
+|---|---|
+| `CityPlus.kt` | 👥 Citizens tab, sell building, rename city/unit, worker improvement queue, ↩️ undo |
+| `MilitaryPlus.kt` | 🎖️ Military tab, nukes with blast preview and confirm, air sweep / strike / rebase |
+| `StatecraftPlus.kt` | 🕵️ Espionage, 🗳️ World Congress and 📨 Inbox tabs, `/civ espionage` |
+| `InfoPlus.kt` | 🏆 Victory, 📖 Civilopedia and ✨ Beliefs tabs, `/civ wiki` |
+| `ModsPlus.kt` | `/civ mod`, `/civ map`, `/civ lobby` (mods, base ruleset, custom maps, scenarios) |
+
+To add a feature area, create `XyzPlus.kt` with `object XyzPlus : Extension`, add it to
+`Extensions.all`, prefix your verbs and choice ids (e.g. `xy_` / `xy:`), and cover it in `selfTest`.
+
 ## Code layout
 
 ```
@@ -46,6 +71,8 @@ bot/
     Store.kt            persistence
     ActivityServer.kt   optional Ktor server for the Activity
     SelfTest.kt         offline end-to-end test
+    Ext.kt              extension API + registry
+    CityPlus.kt, MilitaryPlus.kt, StatecraftPlus.kt, InfoPlus.kt, ModsPlus.kt   feature extensions
 activity/index.html     Activity front-end
 scripts/install-service.sh
 setup.sh / run.sh
@@ -87,6 +114,6 @@ just waits.
 1. Put the game logic in `GameOps` or `Features`. It runs on the engine thread, so it can touch
    Unciv freely.
 2. Add a verb to `Controller.apply()`.
-3. Add the control in `Panel.render()`, keeping Discord's limits in mind: **5 rows** per message,
+3. Add the control in `Panel.render()`, or better, in an extension, keeping Discord's limits in mind: **5 rows** per message,
    **5 buttons** per row, **25 options** per dropdown, 100-character labels and ids.
 4. Exercise it in `SelfTest` and check `Errors: 0`.

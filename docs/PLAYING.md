@@ -8,7 +8,8 @@ CivBot uses the real Unciv engine.
 - [How turns work](#how-turns-work)
 - [Your private panel](#your-private-panel)
 - [Reading the map](#reading-the-map)
-- [The tabs](#the-tabs): [Units](#️-units) · [Cities](#️-cities) · [Research](#-research) · [Policies](#-policies) · [Religion](#-religion) · [Diplomacy](#-diplomacy) · [City-states](#-city-states) · [Overview](#-overview) · [Map](#️-map)
+- [The tabs](#the-tabs): [Units](#️-units) · [Cities](#️-cities) · [Citizens](#-citizens) · [Military](#️-military) · [Research](#-research) · [Policies](#-policies) · [Religion](#-religion) · [Beliefs](#-beliefs) · [Diplomacy](#-diplomacy) · [City-states](#-city-states) · [Espionage](#️-espionage) · [World Congress](#️-world-congress) · [Inbox](#-inbox) · [Overview](#-overview) · [Victory](#-victory) · [Civilopedia](#-civilopedia) · [Map](#️-map)
+- [Undo](#️-undo)
 - [Auto-pick and ending your turn](#auto-pick-and-ending-your-turn)
 - [Tips](#tips)
 
@@ -103,6 +104,10 @@ Switch tabs with the **dropdown at the top** of the panel.
   - **Escort with …** pairs a civilian with a military unit on the same tile, so they move together
   - **Fortify**, **Sleep**, **Explore** (automatic scouting), **Automate** (the AI runs the unit),
     **Wake up** (cancels standing orders), **Skip this turn**, **Disband**
+  - **Queue next: …** / **Remove Forest, then build Farm**: workers can line up a second improvement
+  - **Gift to city-state** (in a city-state's land), **✏️ Rename unit**
+  - **☢️ Nuke a tile…**, **✈️ Air sweep…**, **🎯 Attack target…**, **🛬 Rebase to …** for nukes and aircraft
+    (see [Military](#️-military))
 
 > You can only attack civilizations you're **at war** with. Barbarians are always fair game.
 > Declare war in 🤝 **Diplomacy**.
@@ -122,6 +127,30 @@ Switch tabs with the **dropdown at the top** of the panel.
   - **Focus:** food, production, gold, science, culture, faith or default (citizens re-arrange to match)
   - **Buy tile Xn:** the cheapest tiles you can buy, labelled with their map code
   - **Annex** a puppet city, **Raze** a city, **Stop razing**, **Clear the build queue**
+  - **💸 Sell …** a building (one per city per turn), **✏️ Rename** the city
+
+### 👥 Citizens
+
+Fine control over who works where, like Unciv's city screen.
+- **Pick a city.** The map shades the tiles it works, and the info card lists citizens, unemployed
+  citizens, yields and specialists.
+- **Tile menu:** ⬜ **Work** a tile (it gets locked so the city keeps working it), 🔒 **Lock** /
+  🔓 **Unlock**, or ✖️ **Stop working** (the citizen becomes unemployed).
+- **Specialist menu:** ➕ / ➖ scientists, merchants, engineers and artists in the buildings that have
+  slots.
+- **🔄 Reset** returns everything to automatic. **🚫 Avoid growth** stops the city growing.
+  **✋ / 🤖 Specialists** switches between manual and automatic specialists.
+
+### 🎖️ Military
+
+- An overview of your army by type, the wars you're in, enemies in range, and which fighters are
+  ready to intercept. Unciv intercepts automatically with any fighter that hasn't moved or
+  attacked this turn.
+- **☢️ Nukes:** choose *Nuke a tile…* and type a tile code. The map outlines the blast in red, and
+  the panel lists every city, unit and civilization caught in it, including your own and anyone
+  you'd go to war with. Nothing happens until you pick **☢️ CONFIRM nuke**, and you can cancel.
+- **✈️ Air sweep…** clears enemy interceptors from a tile. **🎯 Attack target…** makes an air or
+  ranged strike on a tile. **🛬 Rebase to …** moves a plane to a city or carrier in range.
 
 ### 🔬 Research
 
@@ -144,13 +173,19 @@ policy tree, and 📜 continues one you've already opened.
 - If you get more beliefs than the panel can show at once (some bonuses grant extra), press
   🤖 **Auto-pick** and the advisor chooses them.
 
+### ✨ Beliefs
+
+Appears only when there's something to pick. Some civilizations can **expand their pantheon** with
+a second belief, and some bonuses grant **extra beliefs for your religion**. Choose them here.
+
 ### 🤝 Diplomacy
 
 - Lists every civilization you've met, with your relationship and their score.
 - **Choose a civilization**, then build a deal:
   - **You give…** and **You ask for…** let you pick several items each: gold (one-off amounts),
-    gold per turn, luxury and strategic resources, technologies, embassies, open borders,
-    research agreements, defensive pacts, and peace when at war.
+    gold per turn, luxury and strategic resources, technologies, **cities**, embassies, open
+    borders, research agreements, defensive pacts, **declaring war on a third civ**, and peace when
+    at war.
   - **🤝 Propose deal:** AIs answer right away. A human player gets the offer in the game thread
     with **Accept / Decline** buttons.
 - **🔥 War** declares war, and **🕊️ Peace** proposes peace when you're at war.
@@ -165,6 +200,28 @@ policy tree, and 📜 continues one you've already opened.
   worker as tribute (only listed when they'd actually give in).
 - **War / Peace** with city-states is here too.
 
+### 🕵️ Espionage
+
+Only in games where the host turned spies on (`/civ espionage enabled:True` in the lobby).
+- Lists your spies with their rank (⭐), where they are and what they're doing.
+- **Select a spy → Send to…:**
+  - one of **your cities** to guard it against enemy spies
+  - a **foreign capital or city** to steal technology
+  - a **city-state** to rig its elections
+- **✊ Stage coup** tries to take over a city-state's alliance. **🏠 Hideout** brings the spy home.
+- Once you move a spy yourself, the advisor leaves your spies alone.
+
+### 🗳️ World Congress
+
+Shows who owns the UN (it counts double), turns to the next vote, the votes needed to win, and
+the last result. When a vote is open, pick a civilization to vote for, or abstain.
+
+### 📨 Inbox
+
+Everything the AI has asked of you: **demands** (stop settling near us, stop spying, …) to agree to
+or refuse, **friendship offers**, and **trade offers** to accept or decline. There's also a news list
+you can clear. Anything you leave unanswered is handled by the advisor when you end your turn.
+
 ### 📊 Overview
 
 Your empire at a glance: cities, population, units, era, golden age progress, income per turn,
@@ -173,12 +230,30 @@ victory types are in play, and recent history.
 
 When you earn a **free Great Person**, choose it here.
 
+### 🏆 Victory
+
+Progress towards every victory type in this game: spaceship parts, completed policy trees,
+original capitals held, World Congress votes, and turns left. You see your own details plus what
+you know about the others, and the score ranking.
+
+### 📖 Civilopedia
+
+Browse every unit, building, wonder, technology, policy, belief, resource, improvement, terrain,
+promotion and nation, with Unciv's descriptions and pixel art. Pick a category, flip pages with
+◀ / ▶, or **🔍 Search…** (typos are fine). `/civ wiki query:…` does the same lookup anywhere in
+your server, even outside a game.
+
 ### 🗺️ Map
 
 - Arrow buttons **scroll** the view, and 🏠 **Home** jumps back to your capital.
 - **🔍 Inspect…** opens a box: type a tile code to see its terrain, yields, resource,
   improvement, owner and any units on it.
 - **🌍 World** shows everything you've explored on one image; **🔎 Zoomed** goes back.
+
+## ↩️ Undo
+
+Made a mistake? **↩️ Undo last action** is the first entry in the Unit actions and City actions
+menus. It goes back up to 10 steps within your current turn. Once you end the turn, there's no undo.
 
 ## Auto-pick and ending your turn
 
