@@ -1,68 +1,102 @@
 # CivBot: play Unciv inside Discord
 
-**Full 4X Civilization games, played entirely inside a Discord channel.**
+**Complete 4X Civilization games, played entirely inside a Discord channel.**
+
 CivBot runs the real [Unciv](https://github.com/yairm210/Unciv) engine (the open-source Civ V
-remake) and turns it into buttons, dropdowns and map images. You get Unciv's rules, maps, AI
-opponents, city-states, barbarians, religion, diplomacy and victories. Everyone plays from
-Discord, with nothing to install as a player.
+remake) on your machine and turns it into Discord buttons, dropdowns and map images. You get
+Unciv's rules, map generation, AI opponents, city-states, barbarians, religion, espionage,
+diplomacy and every victory type. Players install nothing: they click.
 
-![Map views rendered by the bot](docs/images/hero.png)
+![A player's private map with unit paths and borders, next to the global politics diagram](docs/images/hero.png)
 
-- 🧑‍🤝‍🧑 **Multiplayer in a channel:** friends join a lobby and take turns. The bot pings whoever is up.
-- 🌫️ **Real fog of war:** each player's panel is private (ephemeral), so only you see your empire.
-- 🗺️ **Proper map images** drawn with Unciv's pixel-art tileset, with chess-style tile codes (`D5`).
-- 🤖 **AI opponents and an AI advisor** that can fill in any decision you'd rather skip.
-- 💾 **Saves after every action**, so restarting the bot never loses a game.
-- 🧪 **Offline self-test** that plays a whole game and checks every feature without Discord.
+- 🧑‍🤝‍🧑 **Multiplayer in a channel:** friends join a lobby and take turns, and the bot pings whoever is up. Solo games against AIs work too.
+- 🌫️ **Real fog of war:** each player's panel is private (an ephemeral message), so only you see your empire.
+- 🗺️ **Proper maps** drawn with Unciv's pixel-art tiles, with chess-style tile codes (`D5`) for every action.
+- 🧩 **20+ panel tabs** covering what Unciv's screens do, from citizen management to nukes and World Congress votes.
+- 🤖 **An AI advisor** fills in anything you skip, and AutoPlay can run your turns while you're away.
+- 💾 **Saves after every action**, with undo within your turn and host rollback to earlier turns.
+- 🧪 **An offline self-test** plays a full game and checks about 400 features on every change (CI included).
 
 > CivBot is a fan project. It isn't affiliated with Unciv, Firaxis or Discord.
 
 ---
 
-## What you can do
+## Features
 
-| Panel tab | Features |
+### ⚔️ Units and war
+- Move with arrow buttons, or **🎯 Go to** a tile code or city name. Long trips continue on later turns, and the path is drawn on the map with "N turns to get there".
+- Every Unciv unit action: found cities, build improvements (with yield previews, "replaces X" warnings and the reason something is blocked), connect roads, fortify or sleep (also until healed), explore, automate, pillage, paradrop, Great Person abilities, missionaries and prophets, upgrades, promotions (including along a path, plus saved defaults), escorts, swapping places, gifting units to city-states.
+- **Combat preview** on every attack: expected damage both ways and a verdict ("likely win", "may die").
+- Confirm steps for pillaging, disbanding and founding a city that breaks a promise.
+- **🎖️ Military tab:** army overview, enemies in range, ☢️ nukes with a blast-radius preview and a confirm step, ✈️ air sweeps, strikes and rebasing.
+- **👥 Group moves**, ⬆️ upgrade all units of a type, and a 🪖 overview of every unit.
+- **🤖 AutoPlay:** military, civilians or economy once; a full turn; or your next N turns.
+
+### 🏙️ Cities
+- **🏗️ Production:**
+  - full queue editing: move up, down, top or end; add to top; remove; do it in all cities at once
+  - buy anything with any allowed currency (gold, faith…), even at its queue position
+  - every production conversion
+  - disable items you never want
+- **👥 Citizens:** work or lock any tile (also by code), specialists, focus (including Manual), avoid growth, reassign while keeping locks.
+- **📈 City details:** border growth, We Love the King Day and demanded luxuries, resistance, local resources, great-person points, religion pressure, a breakdown of any stat, the full buildings list, and why something can't be built (and which cities are missing a requirement).
+- Buy tiles (any tile or a whole ring), sell buildings, rename, annex, raze or stop razing, bombard.
+- **Captured cities:** keep, annex, puppet, raze or liberate. Liberating can bring a defeated civ back.
+- **🏙️ Cities overview** (sortable) and **🏛️ Wonders**: who built what, and where you could.
+
+### 🔬 Science, culture and faith
+- Research the next tech (each option lists what it unlocks), set long-term goals, and queue several.
+- Social policies with their effects and branch progress.
+- Pantheons, founding and enhancing religions (a custom name, any number of beliefs), expanding pantheons, faith purchases.
+- Free Great People, free techs, free policies.
+
+### 🤝 Diplomacy
+- **A deal builder** with every trade item Unciv has:
+  - gold, gold per turn and any amount of a resource
+  - cities, embassies, open borders, research agreements, defensive pacts
+  - asking a third civ to declare war, peace
+- **AIs answer on their own turn**, as in Unciv, and may counter-offer. You can counter their offers or withdraw yours.
+- **War with a consequences check** (pacts, promises, allies) and Unciv's peace lock; friendship; denouncing.
+- **🧭 Relations:** why each AI likes or dislikes you, promises, all active deals with turns left, and **📢 demands** you can make.
+- **🏰 City-states:** influence, ally, bonuses, quests, tribute, gold and improvement gifts, protection, diplomatic marriage.
+- **🕵️ Espionage** (steal tech, rig elections, coups, counter-intelligence) and **🗳️ World Congress** votes.
+- Deals, peace and friendship between human players arrive in the game thread with Accept/Decline buttons.
+
+### 📊 Information
+- **📨 Inbox:** AI demands, friendship and trade offers, and random events with choices.
+- **📰 News:** every notification; picking one jumps to the unit, city, tile or Civilopedia entry.
+- **📊 Stats:**
+  - a per-source breakdown of every stat, the score breakdown and unit supply
+  - resources by origin, religions, global politics with a diagram
+  - demographics, 📈 history charts, the full notification log
+- **🏆 Victory** progress for every victory type, with every civ ranked by any stat.
+- **🎞️ Replay** of the world map, turn by turn.
+- **📖 Civilopedia** with search, cross-links and pixel art, plus `/civ wiki` for anyone.
+- **🗺️ Map:** scroll anywhere, inspect any tile, or see your whole explored world.
+
+### 🎛️ Hosting and setup
+- A lobby with map size and type, difficulty and AI opponents, plus ⚙️ settings and **`/civ setup`** for **every other Unciv game option**: map shape, custom sizes, resources, sea level, seed, max turns, One City Challenge, raging barbarians, nukes, chosen AI nations and more.
+- **Unciv mods from GitHub** (search with `/civ mod action:browse`), **custom maps** from Unciv's map editor, and **scenarios**.
+- **Save export and import** to move games between Discord and desktop Unciv.
+- One thread per game, turn pings, reminders, AFK auto-skip, spectating, kick and host handover, and rollback (every player votes).
+
+### What it can't do
+- **No map editor inside Discord.** Make maps in Unciv's own editor and upload them.
+- **No manual fighter interception.** Unciv has none either; fighters intercept automatically.
+- **No turns played at the same time.** Turns are hotseat-style, one player at a time, because that's how Unciv's engine works.
+
+## Gallery
+
+| | |
 |---|---|
-| ⚔️ **Units** | move with arrow buttons or 🎯 *Go to* a tile code / city; found cities; build roads, farms, mines… and queue the next improvement; 🛣️ connect a road to any tile or city; fortify, sleep (also until healed), explore, automate; attack; promotions and upgrades; escort pairs; pillage; paradrop; gift units to city-states; rename; Great Person abilities; missionaries and prophets; 🔄 swap places; 👥 move a group; promote along a path and save default promotions; ⬆️ upgrade all of a type; 🤖 automate units for one turn; destinations drawn on the map; **↩️ undo** |
-| 🏙️ **Cities** | production with an optional 📋 queue; buy with gold or faith; city bombard; citizen focus; buy tiles (any tile or a whole ring); sell buildings; rename; annex puppets; raze / stop razing; **↩️ undo** |
-| 🏗️ **Production** | full queue editing (move up/down/top/end, add to top, remove, all cities at once); buy anything with any allowed currency at its queue position; every production conversion; disable items; 📈 city details (border growth, We Love the King Day, religion pressure, great-person points, stat explanations, "why can't I build this?") |
-| 🏙️ **Cities overview** · 🏛️ **Wonders** | every city's stats in one sortable list · every wonder, built by whom, and where you can build it |
-| 👥 **Citizens** | choose exactly which tiles each city works, lock tiles, assign specialists, avoid growth |
-| 🎖️ **Military** | army overview, wars and enemies in range, ☢️ nukes with a blast preview and a confirm step, ✈️ air sweeps, air strikes, rebasing to cities or carriers |
-| 🔬 **Research** | pick the next tech (each option lists what it unlocks) or set a far-off goal and the whole path is queued |
-| 📜 **Policies** | adopt social policies when your culture allows |
-| 🙏 **Religion** | found a pantheon, name your religion, choose founder / follower / enhancer beliefs |
-| 🤝 **Diplomacy** | a deal builder (gold, gold per turn, luxuries, strategic resources, techs, **cities**, embassies, open borders, research agreements, defensive pacts, **asking a third civ to join a war**, peace), war (with a consequences check and the peace lock), friendship, denouncing; custom gold amounts |
-| 🧭 **Relations** | why each AI likes or dislikes you, promises, active deals with turns left, world politics, 📢 make demands |
-| 🏰 **City-states** | gold gifts, pledge protection, demand tribute, see influence, allies and quests |
-| 🕵️ **Espionage** | move spies to steal technology, rig city-state elections, stage coups, or guard your own cities |
-| 🗳️ **World Congress** | vote for world leader, see the tally and what's needed to win |
-| 📨 **Inbox** | answer AI demands, friendship offers and AI trade offers yourself; news |
-| ✨ **Beliefs** | expand your pantheon, add free beliefs to your religion |
-| 📊 **Overview** · **Stats** | empire stats; per-source breakdowns of every stat; score breakdown; unhappiness effects; unit supply; gold→science; resources by origin; religions; global politics with a relations diagram; demographics; 📈 history charts; full notification log |
-| 🎞️ **Replay** | step through the world map turn by turn |
-| 📰 **News** | every notification, and picking one jumps to the unit, city, tile or Civilopedia entry it's about (or shows the Maya calendar) |
-| 🪖 **Units overview** | every unit on pages: type, place, HP, moves, XP, promotions, nearest city, orders; pick one to select it |
-| 🏆 **Victory** | progress towards every victory type (spaceship parts, policy trees, capitals, votes, time), every civ ranked by any stat |
-| 📖 **Civilopedia** | every unit, building, wonder, tech, policy, belief, resource, terrain and nation (plus Unciv's tutorials, global uniques and religion overviews), with search, 🔗 related-entry links and pixel art |
-| 🗺️ **Map** | scroll anywhere, 🔍 inspect any tile, 🌍 view the whole explored world |
-| 🔬 **Research queue** · ⛪ **Found religion** | queue several research goals · name your religion and pick any number of beliefs |
-
-Plus:
-- a lobby with full game settings, including **Unciv mods from GitHub**, **custom maps** made in
-  Unciv's map editor, **scenarios** and **espionage**
-- one thread per game, with turn pings and reminders, and optional AFK auto-skip
-- deals, peace and friendship offers between human players, answered with Accept/Decline buttons
-- captured-city decisions, spectating and host tools
-- `/civ wiki` lookups for anyone, even outside a game
-- random events with choices (from mods and scenarios) answered in your 📨 Inbox
-
-An optional **Discord Activity** add-on shows the same panel as an embedded web app.
+| ![Nuke target with the blast radius outlined in red](docs/images/nuke-preview.png) | ![Replay frame of the explored world](docs/images/replay.png) |
+| ☢️ Nuke preview: the blast zone in red, with a confirm step before launch | 🎞️ Replay: the world as it was on an earlier turn |
+| ![Unit sprite from the Civilopedia](docs/images/civilopedia-art.png) | ![Global politics diagram](docs/images/politics.png) |
+| 📖 Civilopedia entries use Unciv's own pixel art | 📊 Who's at war, allied or friendly, at a glance |
 
 ## Quick start
 
-You need **Java 21**, **git**, and a computer that stays on while people play. Your own PC works
-fine.
+You need **Java 21**, **git**, and a computer that's on while people play. Your own PC works fine.
 
 ```bash
 git clone https://github.com/milk4sale/unciv-discord-bot.git
@@ -75,7 +109,7 @@ cp .env.example .env          # paste your bot token into .env
 Then type **`/civ new`** in any channel of your server.
 
 Creating the Discord bot and inviting it takes about five minutes. **[docs/SETUP.md](docs/SETUP.md)**
-walks you through it with every click.
+walks you through every click.
 
 ## Documentation
 
@@ -83,10 +117,10 @@ walks you through it with every click.
 |---|---|
 | [**Setup**](docs/SETUP.md) | creating the Discord app, inviting the bot, installing, running in the background, updating |
 | [**How to play**](docs/PLAYING.md) | players: starting a game, the panel, every tab and action, diplomacy, tips |
-| [**Hosting games**](docs/HOSTING.md) | game settings, host commands, AFK players, threads, spectators |
+| [**Hosting games**](docs/HOSTING.md) | game settings, `/civ setup`, mods, maps, scenarios, saves, rollback, host commands |
 | [**Troubleshooting**](docs/TROUBLESHOOTING.md) | "did not respond", "command is outdated", missing permissions, build problems |
-| [**Activity add-on**](docs/ACTIVITY.md) | optional embedded web app version of the panel |
-| [**Development**](docs/DEVELOPMENT.md) | how it works, code layout, self-test, updating Unciv |
+| [**Activity add-on**](docs/ACTIVITY.md) | an optional embedded web app version of the panel |
+| [**Development**](docs/DEVELOPMENT.md) | how it works, the extension modules, the self-test, updating Unciv |
 
 ## Commands at a glance
 
@@ -94,18 +128,16 @@ walks you through it with every click.
 |---|---|
 | `/civ new` | open a game lobby in this channel |
 | `/civ play` | open your private panel |
-| `/civ board` | re-post the game board |
-| `/civ games` | list your games |
-| `/civ spectate` | watch a game you're not in |
+| `/civ board` · `/civ games` · `/civ spectate` | re-post the board · list your games · watch a game you're not in |
 | `/civ leave` | hand your civilization to the AI |
+| `/civ autoplay turns:N` | let the AI play your next N turns (any click stops it) |
 | `/civ kick @player` · `/civ host @player` · `/civ end` | host tools |
-| `/civ lobby …` · `/civ espionage` | host: pick mods, base rules, custom map, scenario; turn spies on |
-| `/civ setup …` | host: every other Unciv game option (map shape, resources, sea level, max turns, One City Challenge, nukes, AI nations, more AIs…) |
-| `/civ save export` · `/civ save import` | download a game to keep playing in desktop Unciv (once it has ended, or by the host with `allow_export`) · start a lobby from an Unciv save |
-| `/civ mod …` · `/civ map …` | list, install or remove Unciv mods (from GitHub) and custom maps (Manage Server) |
+| `/civ lobby …` · `/civ setup …` · `/civ espionage` | host: mods, base rules, map, scenario · every other game option · spies on/off |
+| `/civ save export` · `/civ save import` | download a game for desktop Unciv (after it ends, or if the host allows it) · start a lobby from an Unciv save |
+| `/civ rollback` | host: go back to an earlier turn (all players must agree) |
+| `/civ mod …` · `/civ map …` | browse, install or remove Unciv mods (from GitHub) and custom maps (Manage Server) |
 | `/civ wiki query:…` | Civilopedia lookup for anyone |
-| `/civ autoplay turns:…` | let the AI play your next turns (0 = stop; any click in your panel stops it too) |
-| `/civ help` | in-Discord quick guide |
+| `/civ help` | an in-Discord quick guide |
 
 ## Credits and license
 
