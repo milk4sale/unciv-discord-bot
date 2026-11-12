@@ -46,9 +46,10 @@ import javax.imageio.ImageIO
  *  - 🏆 Victory tab: progress towards every enabled victory (yours + what Unciv's VictoryScreen reveals about others), score ranking
  *  - 📖 Civilopedia tab (+ `/civ wiki query:`): browse/search the ruleset's Civilopedia text, with pixel art
  *  - ✨ Beliefs tab: extra pantheon beliefs (pantheon expansion) and free beliefs for an existing religion
+ *  - 📊 Stats tab and 🎞️ Replay tab: see [InfoStats] (InfoPlusStats.kt)
  */
 object InfoPlus : Extension {
-    override val viewVerbs = setOf("ip_cat", "ip_item", "ip_pg", "ip_nx", "ip_search", "ip_fb")
+    override val viewVerbs = setOf("ip_cat", "ip_item", "ip_pg", "ip_nx", "ip_search", "ip_fb", "ip_sv", "ip_spg", "ip_rank", "ip_go", "ip_rp", "ip_rturn")
 
     private const val VICTORY = "VICTORY"
     private const val PEDIA = "CIVILOPEDIA"
@@ -58,15 +59,22 @@ object InfoPlus : Extension {
         ExtTab(VICTORY, "Victory", "🏆", "Progress towards each victory, score ranking"),
         ExtTab(PEDIA, "Civilopedia", "📖", "Look up units, buildings, techs, terrain…"),
         ExtTab(PANTHEON, "Beliefs", "✨", "Add a belief to your pantheon or religion") { civ -> pantheonExpandable(civ) || reformable(civ) },
+        ExtTab(InfoStats.STATS, "Stats", "📊", "Breakdowns, resources, religions, politics, log, demographics, charts"),
+        ExtTab(InfoStats.REPLAY, "Replay", "🎞️", "Watch the world's borders grow, turn by turn") { civ -> InfoStats.replayAllowed(civ) },
     )
 
-    override val prompts = mapOf("ip_search" to Prompt("Search the Civilopedia", "What are you looking for?", "e.g. Great Library, Iron, Archer"))
+    override val prompts = mapOf(
+        "ip_search" to Prompt("Search the Civilopedia", "What are you looking for?", "e.g. Great Library, Iron, Archer"),
+        "ip_rturn" to Prompt("Replay: jump to turn", "Turn number", "e.g. 12"),
+    )
 
     override fun renderTab(tabId: String, t: TabCtx) {
         when (tabId) {
             VICTORY -> renderVictory(t)
             PEDIA -> renderPedia(t)
             PANTHEON -> renderPantheon(t)
+            InfoStats.STATS -> InfoStats.render(t)
+            InfoStats.REPLAY -> InfoStats.renderReplay(t)
         }
     }
 
@@ -74,6 +82,7 @@ object InfoPlus : Extension {
         if (!verb.startsWith("ip_")) return false
         val v = ctx.value?.removePrefix("ip:")
         val rs = ctx.game.ruleset
+        if (InfoStats.handle(verb, ctx, v)) return true
         when (verb) {
             "ip_cat" -> { val ps = pedia(ctx.st); ps.cat = v ?: ps.cat; ps.page = 0; ps.item = null }
             "ip_item" -> pedia(ctx.st).item = v
@@ -123,20 +132,44 @@ object InfoPlus : Extension {
     }
 
     /** As Unciv's VictoryScreenCivGroup: real name only for civs we know (or that are dead). */
-    private fun nameFor(viewer: Civilization, c: Civilization): String = when {
+    fun nameFor(viewer: Civilization, c: Civilization): String = when {
         c == viewer -> "**${c.civName}** (you)"
         viewer.knows(c) || c.isDefeated() || viewer.isDefeated() || viewer.isSpectator -> c.civName
         else -> "an unknown civ"
     }
 
     /** VictoryScreen.canViewCivStats */
-    private fun canViewStats(game: GameInfo, viewer: Civilization, viewed: Civilization) =
+    fun canViewStats(game: GameInfo, viewer: Civilization, viewed: Civilization) =
         game.victoryData != null || viewer.isSpectator || !game.gameParameters.hideOtherCivilizationStats || viewed == viewer
 
     /** VictoryScreen's Rankings page visibility */
-    private fun rankingsShown(game: GameInfo, viewer: Civilization) =
+    fun rankingsShown(game: GameInfo, viewer: Civilization) =
         viewer.isSpectator || game.victoryData != null ||
             (game.gameParameters.showCivilizationStats == true && game.gameParameters.showRankings)
+
+    /** May [viewer] see [other]'s score/ranking stats? (Rankings page shown + not hidden by hideOtherCivilizationStats) */
+    fun mayShowStatsOf(viewer: Civilization, other: Civilization): Boolean =
+        other == viewer || (rankingsShown(viewer.gameInfo, viewer) && canViewStats(viewer.gameInfo, viewer, other))
+
+    /** " · 123 pts" when the game's ranking settings let [viewer] see [other]'s score, else "". */
+    fun scoreSuffix(viewer: Civilization, other: Civilization): String =
+        if (mayShowStatsOf(viewer, other)) " · ${other.calculateTotalScore().toInt()} pts" else ""
+
+    /** The Overview tab's ranking lines, honouring showRankings / hideOtherCivilizationStats (as the Rankings page). */
+    fun rankingLines(civ: Civilization): List<String> {
+        val game = civ.gameInfo
+        val shown = rankingsShown(game, civ)
+        val majors = game.civilizations.filter { it.isMajorCiv && canViewStats(game, civ, it) }
+        return com.unciv.ui.screens.victoryscreen.RankingType.filteredEntries(game.gameParameters).mapNotNull { rt ->
+            runCatching {
+                val mine = civ.getStatForRanking(rt)
+                if (!shown || civ.isSpectator) return@runCatching "${rt.label}: $mine"
+                val ranked = majors.sortedByDescending { if (it.isDefeated()) Int.MIN_VALUE else it.getStatForRanking(rt) }
+                "${rt.label}: $mine (#${ranked.indexOf(civ) + 1} of ${ranked.size})"
+            }.getOrNull()
+        } + (if (!shown) listOf("_Rankings of other civilizations are hidden in this game._")
+             else if (game.gameParameters.hideOtherCivilizationStats && game.victoryData == null) listOf("_Ranked among the civs whose stats you may see._") else emptyList())
+    }
 
     /** Extra lines for the milestone being worked on — the text form of Milestone.getVictoryScreenButtons. */
     private fun milestoneDetails(m: Milestone, v: Victory, civ: Civilization): List<String> {
@@ -276,6 +309,12 @@ object InfoPlus : Extension {
 
     private fun renderVictory(t: TabCtx) {
         t.includeAdvisor = false
+        t.rows += ActionRow.of(listOfNotNull(
+            t.button("ip_go", "Demographics", "🎯", 2, true, InfoStats.View.DEMOGRAPHICS.key),
+            t.button("ip_go", "Charts", "📈", 2, true, InfoStats.View.CHARTS.key),
+            t.button("ip_go", "Replay", "🎞️", 2, InfoStats.replayAllowed(t.civ), InfoStats.REPLAY),
+            t.button("ip_go", "Stats", "📊", 2, true, InfoStats.View.BREAKDOWN.key),
+        ))
         var total = 0
         for ((name, value) in victoryFields(t.civ)) {
             if (total + value.length > 3600) break
@@ -304,8 +343,11 @@ object InfoPlus : Extension {
         Cat("promotions", "Promotions", "⭐") { rs, _ -> rs.unitPromotions.values },
         Cat("unittypes", "Unit types", "🛡️") { rs, _ -> rs.unitTypes.values },
         Cat("nations", "Nations", "🏳️") { rs, _ -> rs.nations.values.filter { !it.isSpectator } },
+        // The Personalities file contains unused chaff: only those some nation uses (CivilopediaCategories.Personality)
+        Cat("personalities", "Personalities", "🎭") { rs, _ -> rs.personalities.values.filter { p -> rs.nations.values.any { it.personality == p.name } } },
         Cat("eras", "Eras", "📅") { rs, _ -> rs.eras.values },
         Cat("victories", "Victory types", "🏆") { rs, g -> rs.victories.values.filter { g == null || it.name in g.gameParameters.victoryTypes } },
+        Cat("unitnames", "Unit names", "🏷️") { rs, _ -> rs.unitNameGroups.values.filter { it.unitNames.isNotEmpty() && it.getUnits(rs).isNotEmpty() } },
         Cat("tutorials", "Tutorials", "❓") { rs, _ -> rs.tutorials.values },
         Cat("difficulties", "Difficulty levels", "🎚️") { rs, _ -> rs.difficulties.values },
         Cat("speeds", "Game speeds", "⏱️") { rs, _ -> rs.speeds.values },
@@ -390,6 +432,8 @@ object InfoPlus : Extension {
         if (sb.isNotBlank()) out += sb.toString().trim()
         return out.filter { it.isNotBlank() }
     }
+
+    fun fitLines(lines: List<String>, max: Int) = fit(lines, max)
 
     private fun fit(lines: List<String>, max: Int): String {
         val c = chunks(lines, max - 2)
@@ -586,6 +630,10 @@ object InfoPlus : Extension {
                 ?: icon("Images.UnitPromotionIcons/UnitPromotionIcons/${e.name.replace(Regex(" [IVX]+$"), "")}"), Color(60, 120, 60))
             is Nation -> disc(icon("Images.NationIcons/NationIcons/${e.name}"), awt(e.getOuterColor()), awt(e.getInnerColor()))
             is Victory -> disc(icon("Images.NationIcons/VictoryTypeIcons/${e.name}"), Color(150, 40, 40))
+            is com.unciv.models.ruleset.unit.UnitNameGroup -> e.getUnits(rs).firstOrNull()?.let { u ->
+                img(File(hexDir, "Units/${u.name}.png"))?.let { stack(listOfNotNull(hexTile(if (u.isWaterUnit) "Ocean" else "Grassland"), it)) }
+                    ?: disc(icon("Images.ConstructionIcons/UnitIcons/${u.name}"), Color(70, 90, 120))
+            }
             is Terrain -> when (e.type) {
                 TerrainType.Land, TerrainType.Water -> stack(listOfNotNull(hexTile(e.name)))
                 TerrainType.NaturalWonder -> stack(listOfNotNull(hexTile(e.name)).ifEmpty { layered(groundFor(e.occursOn, rs), e.name) })
@@ -875,6 +923,19 @@ object InfoPlus : Extension {
             check(t.act(a, "ip_fbok", emptyList(), null, "free belief (reform religion)"), "add free belief")
             check(t.eng { g -> !GameOps.civOf(g, a).religionManager.hasFreeBeliefs() }, "free beliefs not consumed")
         } else println("  [beliefs] couldn't cheat a religion — free-belief path not exercised")
+
+        // ---- 📖 new Civilopedia categories (Unciv's Personalities / Unit Names)
+        val newCats = t.eng { g -> listOf("personalities", "unitnames").associateWith { k -> entries(cats.first { it.key == k }, g.ruleset, g).size } }
+        println("  [pedia] new categories: $newCats")
+        check(newCats.values.all { it > 0 }, "personalities/unit names empty: $newCats")
+        t.act(a, "tab", emptyList(), PEDIA, null)
+        t.act(a, "ip_cat", emptyList(), "ip:unitnames", null)
+        check(t.act(a, "ip_item", emptyList(), "ip:" + t.eng { g -> entries(cats.first { it.key == "unitnames" }, g.ruleset, g).first().name },
+            "civilopedia personalities + unit names"), "unit names entry")
+        t.render(a, "ip-pedia-unitnames")
+        t.act(a, "ip_cat", emptyList(), "ip:personalities", null); t.render(a, "ip-pedia-personality")
+
+        InfoStats.selfTest(t)
         t.act(a, "tab", emptyList(), "UNITS", null)
     }
 }

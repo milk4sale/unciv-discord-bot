@@ -185,9 +185,9 @@ object Features {
         val lines = ArrayList<String>()
         lines += "${cs.cityStateType.name} city-state · ${cs.cities.size} city"
         if (dm != null) lines += "Influence: **${dm.getInfluence().toInt()}** · ${dm.relationshipLevel()}" + (if (civ.isAtWarWith(cs)) " · ⚔️ at war" else "")
-        lines += "Ally: ${cs.allyCiv?.civName ?: "none"}"
+        lines += "Ally: ${cs.allyCiv?.let { InfoStats.civName(civ, it) } ?: "none"}"
         val protectors = f.getProtectorCivs()
-        if (protectors.isNotEmpty()) lines += "Protected by: ${protectors.joinToString { it.civName }}"
+        if (protectors.isNotEmpty()) lines += "Protected by: ${protectors.joinToString { InfoStats.civName(civ, it) }}"
         val quests = cs.questManager.getAssignedQuestsFor(civ.civID).toList()
         if (quests.isNotEmpty()) lines += "Quests for you:\n" + quests.joinToString("\n") { "• " + GameOps.clean(it.getDescription()) }
         return lines.joinToString("\n")
@@ -398,13 +398,7 @@ object Features {
             "${e.key}: ${e.value}" + (gp.pointsForNextGreatPersonCounter[e.key].takeIf { it > 0 }?.let { "/$it" } ?: "")
         }
         if (gpLines.isNotEmpty()) out += "🌟 Great People points" to gpLines
-        val ranks = com.unciv.ui.screens.victoryscreen.RankingType.entries.mapNotNull { rt ->
-            runCatching {
-                val all = civ.gameInfo.getAliveMajorCivs().map { it to it.getStatForRanking(rt) }.sortedByDescending { it.second }
-                val place = all.indexOfFirst { it.first == civ } + 1
-                "${rt.name}: ${all.firstOrNull { it.first == civ }?.second ?: 0} (#$place of ${all.size})"
-            }.getOrNull()
-        }
+        val ranks = InfoPlus.rankingLines(civ) // honours showRankings / hideOtherCivilizationStats
         if (ranks.isNotEmpty()) out += "📊 Rankings" to ranks.joinToString("\n").take(1024)
         val victories = civ.gameInfo.gameParameters.victoryTypes.joinToString(" · ")
         if (victories.isNotEmpty()) out += "🏆 Victory types in play" to victories
